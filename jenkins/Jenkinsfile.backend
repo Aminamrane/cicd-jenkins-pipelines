@@ -18,10 +18,9 @@ pipeline {
         
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing Python dependencies...'
+                echo '📦 Installing Python dependencies with uv...'
                 sh '''
-                    python -m pip install --upgrade pip --break-system-packages
-                    pip install --break-system-packages -e .
+                    uv sync
                 '''
             }
         }
@@ -30,9 +29,9 @@ pipeline {
             steps {
                 echo '🔍 Running linters...'
                 sh '''
-                    pip install ruff black --break-system-packages
-                    ruff check . || true
-                    black --check . || true
+                    uv pip install ruff black
+                    uv run ruff check . || true
+                    uv run black --check . || true
                 '''
             }
         }
@@ -41,9 +40,9 @@ pipeline {
             steps {
                 echo '🛡️ Running security scan...'
                 sh '''
-                    pip install bandit safety --break-system-packages
-                    bandit -r app/ || true
-                    safety check || true
+                    uv pip install bandit safety
+                    uv run bandit -r app/ || true
+                    uv run safety check || true
                 '''
             }
         }
@@ -52,8 +51,8 @@ pipeline {
             steps {
                 echo '🧪 Running unit tests...'
                 sh '''
-                    pip install pytest pytest-cov --break-system-packages
-                    pytest app/tests/ --cov=app --cov-report=xml --cov-report=html || true
+                    uv pip install pytest pytest-cov
+                    uv run pytest app/tests/ --cov=app --cov-report=xml --cov-report=html || true
                 '''
             }
         }
