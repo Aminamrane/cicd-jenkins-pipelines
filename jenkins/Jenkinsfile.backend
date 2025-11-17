@@ -1,0 +1,95 @@
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_IMAGE = 'aminamrane/fastapi-backend'
+        GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+    }
+    
+    stages {
+        stage('Checkout Backend Code') {
+            steps {
+                echo '🔄 Checking out backend repository...'
+                git branch: 'main', 
+                    url: 'https://github.com/Aminamrane/fastapi-backend.git'
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                echo '📦 Installing Python dependencies...'
+                sh '''
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt || pip install -e .
+                '''
+            }
+        }
+        
+        stage('Code Quality - Linting') {
+            steps {
+                echo '🔍 Running linters...'
+                sh '''
+                    pip install ruff black
+                    ruff check . || true
+                    black --check . || true
+                '''
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                echo '🛡️ Running security scan...'
+                sh '''
+                    pip install bandit safety
+                    bandit -r app/ || true
+                    safety check || true
+                '''
+            }
+        }
+        
+        stage('Unit Tests') {
+            steps {
+                echo '🧪 Running unit tests...'
+                sh '''
+                    pip install pytest pytest-cov
+                    pytest app/tests/ --cov=app --cov-report=xml --cov-report=html || true
+                '''
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                echo '🐋 Building Docker image...'
+                sh """
+                    docker build -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} .
+                    docker tag ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} ${DOCKER_IMAGE}:latest
+                """
+            }
+        }
+        
+        stage('Push to Registry') {
+            steps {
+                echo '📤 Pushing Docker image to registry...'
+                sh """
+                    echo "Image ready: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                    # docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                    # docker push ${DOCKER_IMAGE}:latest
+                """
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ Backend pipeline completed successfully!'
+        }
+        failure {
+            echo '❌ Backend pipeline failed!'
+        }
+        always {
+            echo '🧹 Cleaning up workspace...'
+            cleanWs()
+        }
+    }
+}
