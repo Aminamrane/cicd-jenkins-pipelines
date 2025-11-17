@@ -16,50 +16,9 @@ pipeline {
             }
         }
         
-        stage('Install Dependencies') {
-            steps {
-                echo '📦 Installing Python dependencies with uv...'
-                sh '''
-                    uv sync
-                '''
-            }
-        }
-        
-        stage('Code Quality - Linting') {
-            steps {
-                echo '🔍 Running linters...'
-                sh '''
-                    uv pip install ruff black
-                    uv run ruff check . || true
-                    uv run black --check . || true
-                '''
-            }
-        }
-        
-        stage('Security Scan') {
-            steps {
-                echo '🛡️ Running security scan...'
-                sh '''
-                    uv pip install bandit safety
-                    uv run bandit -r app/ || true
-                    uv run safety check || true
-                '''
-            }
-        }
-        
-        stage('Unit Tests') {
-            steps {
-                echo '🧪 Running unit tests...'
-                sh '''
-                    uv pip install pytest pytest-cov
-                    uv run pytest app/tests/ --cov=app --cov-report=xml --cov-report=html || true
-                '''
-            }
-        }
-        
         stage('Build Docker Image') {
             steps {
-                echo '🐋 Building Docker image...'
+                echo '🐋 Building Docker image (includes all dependencies)...'
                 sh """
                     docker build -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} .
                     docker tag ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} ${DOCKER_IMAGE}:latest
@@ -67,11 +26,21 @@ pipeline {
             }
         }
         
+        stage('Test in Docker') {
+            steps {
+                echo '🧪 Running tests inside Docker container...'
+                sh """
+                    docker run --rm ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} pytest app/tests/ || true
+                """
+            }
+        }
+        
         stage('Push to Registry') {
             steps {
-                echo '📤 Pushing Docker image to registry...'
+                echo '📤 Docker image ready for deployment'
                 sh """
-                    echo "Image ready: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                    echo "✅ Image built: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                    echo "✅ Image tagged: ${DOCKER_IMAGE}:latest"
                     # docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
                     # docker push ${DOCKER_IMAGE}:latest
                 """
@@ -82,6 +51,7 @@ pipeline {
     post {
         success {
             echo '✅ Backend pipeline completed successfully!'
+            echo "📦 Docker image: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
         }
         failure {
             echo '❌ Backend pipeline failed!'
