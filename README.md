@@ -1,17 +1,3 @@
-# CI/CD Jenkins Pipelines
-
-Multi-repository CI/CD pipeline configuration for FastAPI + React project.
-
-Perfect! ✅ Let's create a comprehensive README and push everything!
-
-STEP 4.5: Create README for CI/CD repo
-Create/Replace this file:
-README.md
-Put this code inside:
-markdown# CI/CD Jenkins Pipelines
-
-Multi-repository CI/CD pipeline configuration for FastAPI + React project.
-
 ## 📁 Repository Structure
 ```
 cicd-jenkins-pipelines/
@@ -143,50 +129,12 @@ Definition: Pipeline script from SCM
 
 ---
 
-## 🧪 Testing Strategy
-
-### Unit Tests
-- **Backend:** Pytest with coverage > 80%
-- **Frontend:** Vitest for component tests
-
-### Integration Tests
-- Docker Compose spins up full stack
-- API endpoint testing
-- Database connectivity
-- Service health checks
-
-### E2E Tests
-- Playwright for browser automation
-- User flow testing
-- Cross-browser compatibility
-
----
-
-## 📊 Quality Gates
-
-All pipelines must pass:
-- ✅ Code coverage ≥ 80%
-- ✅ No critical security vulnerabilities
-- ✅ All tests passing
-- ✅ Linting passes
-- ✅ Docker image builds successfully
-
----
-
 ## 🔗 Related Repositories
 
 - [Backend Application](https://github.com/Aminamrane/fastapi-backend)
 - [Frontend Application](https://github.com/Aminamrane/react-frontend)
 - Infrastructure (managed by DevOps team)
 
----
 
-## 📝 Next Steps
-
-- [ ] Configure Jenkins webhooks
-- [ ] Set up Docker Hub credentials
-- [ ] Test backend pipeline
-- [ ] Test frontend pipeline
-- [ ] Test integration pipeline
 - [ ] Add Slack notifications
 - [ ] Implement deployment stages
