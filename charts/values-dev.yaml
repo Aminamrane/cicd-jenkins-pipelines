@@ -1,0 +1,54 @@
+# Development environment overrides
+# Used for DEV/staging deployments
+
+# Backend overrides
+backend:
+  replicaCount: 1
+  image:
+    tag: "latest"
+  ingress:
+    hosts:
+      - host: api.dev.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: backend-dev-tls
+        hosts:
+          - api.dev.example.com
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  env:
+    - name: ENVIRONMENT
+      value: "development"
+    - name: BACKEND_CORS_ORIGINS
+      value: "https://dashboard.dev.example.com"
+
+# Frontend overrides
+frontend:
+  replicaCount: 1
+  image:
+    tag: "latest"
+  ingress:
+    hosts:
+      - host: dashboard.dev.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: frontend-dev-tls
+        hosts:
+          - dashboard.dev.example.com
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 25m
+      memory: 64Mi
+

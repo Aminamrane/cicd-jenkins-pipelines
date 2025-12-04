@@ -1,54 +1,189 @@
+/*
+ * Jenkinsfile.frontend - Frontend CI/CD Pipeline
+ * 
+ * This pipeline builds, tests, and deploys the React frontend application.
+ * 
+ * Stages:
+ *   1. Checkout - Clone frontend repository
+ *   2. Setup - Install Node.js dependencies
+ *   3. Quality - Linting, TypeScript check
+ *   4. Test - Unit tests with coverage
+ *   5. SonarQube - Code quality analysis
+ *   6. Build - Create production build
+ *   7. Docker - Build Docker image with versioned tag
+ *   8. Push - Push to Container Registry
+ *   9. Deploy - Trigger Helm pipeline for frontend-only deployment
+ */
+
 pipeline {
     agent any
     
     environment {
+        // Docker Configuration
         DOCKER_REGISTRY = 'docker.io'
         DOCKER_IMAGE = 'aminamrane/react-frontend'
+        DOCKER_CREDENTIALS = credentials('docker-hub-credentials')
+        
+        // Version tagging
         GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+        BUILD_VERSION = "${env.BUILD_NUMBER}"
+        
+        // SonarQube Configuration
+        SONAR_HOST_URL = credentials('sonarqube-url')
+        SONAR_TOKEN = credentials('sonarqube-token')
+        SONAR_PROJECT_KEY = 'react-frontend'
+        
+        // Node.js Configuration
+        NODE_ENV = 'production'
+        CI = 'true'
+    }
+    
+    tools {
+        nodejs 'NodeJS-20'  // Configure in Jenkins Global Tool Configuration
+    }
+    
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '15'))
+        timestamps()
+        disableConcurrentBuilds()
+    }
+    
+    triggers {
+        // Trigger on push to main branch (via webhook)
+        githubPush()
     }
     
     stages {
         stage('Checkout Frontend Code') {
             steps {
-                echo '🔄 Checking out frontend repository...'
-                git branch: 'main', 
-                    url: 'https://github.com/Aminamrane/react-frontend.git'
+                echo '📦 Checking out frontend repository...'
+                git branch: 'main',
+                    url: 'https://github.com/Aminamrane/react-frontend.git',
+                    credentialsId: 'github-token'
+                
+                script {
+                    // Generate semantic version tag
+                    env.IMAGE_TAG = generateImageTag()
+                    echo "🏷️ Image tag: ${env.IMAGE_TAG}"
+                }
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                echo '📦 Installing Node dependencies...'
+                echo '📦 Installing Node.js dependencies...'
                 sh '''
+                    # Use npm ci for clean, reproducible builds
                     npm ci
+                    
+                    echo "✅ Dependencies installed"
+                    echo "Node version: $(node --version)"
+                    echo "NPM version: $(npm --version)"
                 '''
             }
         }
         
-        stage('Code Quality - Linting') {
-            steps {
-                echo '🔍 Running ESLint and Prettier...'
-                sh '''
-                    npm run lint || true
-                '''
-            }
-        }
-        
-        stage('TypeScript Check') {
-            steps {
-                echo '📘 Running TypeScript compiler check...'
-                sh '''
-                    npx tsc --noEmit || true
-                '''
+        stage('Code Quality') {
+            parallel {
+                stage('ESLint') {
+                    steps {
+                        echo '🔍 Running ESLint...'
+                        sh '''
+                            npm run lint -- --format json --output-file eslint-report.json || true
+                            npm run lint || true
+                        '''
+                    }
+                }
+                
+                stage('TypeScript Check') {
+                    steps {
+                        echo '📘 Running TypeScript compiler check...'
+                        sh '''
+                            npx tsc --noEmit --pretty || true
+                        '''
+                    }
+                }
+                
+                stage('Prettier Check') {
+                    steps {
+                        echo '✨ Checking code formatting...'
+                        sh '''
+                            npx prettier --check "src/**/*.{ts,tsx,js,jsx,json,css,scss}" || true
+                        '''
+                    }
+                }
             }
         }
         
         stage('Unit Tests') {
             steps {
-                echo '🧪 Running unit tests...'
+                echo '🧪 Running unit tests with coverage...'
                 sh '''
-                    npm run test:unit || true
+                    # Run tests with coverage (Vitest)
+                    npm run test:unit -- --coverage --reporter=junit --outputFile=test-results.xml || true
+                    
+                    echo "✅ Tests completed"
                 '''
+                
+                // Archive test results
+                junit allowEmptyResults: true, testResults: '**/test-results.xml'
+                
+                // Publish coverage report
+                publishHTML(target: [
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: 'coverage',
+                    reportFiles: 'index.html',
+                    reportName: 'Coverage Report'
+                ])
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                echo '📊 Running SonarQube analysis...'
+                script {
+                    withSonarQubeEnv('SonarQube') {
+                        sh '''
+                            sonar-scanner \
+                                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                -Dsonar.projectName="React Frontend" \
+                                -Dsonar.projectVersion=${IMAGE_TAG} \
+                                -Dsonar.sources=src \
+                                -Dsonar.tests=tests \
+                                -Dsonar.test.inclusions=**/*.test.ts,**/*.test.tsx,**/*.spec.ts,**/*.spec.tsx \
+                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                                -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/** \
+                                -Dsonar.host.url=${SONAR_HOST_URL} \
+                                -Dsonar.login=${SONAR_TOKEN} \
+                                || echo "SonarQube analysis skipped (server unavailable)"
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            steps {
+                echo '🚦 Checking SonarQube Quality Gate...'
+                script {
+                    try {
+                        timeout(time: 5, unit: 'MINUTES') {
+                            def qg = waitForQualityGate()
+                            if (qg.status != 'OK') {
+                                echo "⚠️ Quality Gate status: ${qg.status}"
+                                // Uncomment to fail on quality gate failure:
+                                // error "Pipeline aborted due to quality gate failure: ${qg.status}"
+                            } else {
+                                echo "✅ Quality Gate passed!"
+                            }
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Quality Gate check skipped: ${e.message}"
+                    }
+                }
             }
         }
         
@@ -56,17 +191,33 @@ pipeline {
             steps {
                 echo '🏗️ Building React application...'
                 sh '''
+                    # Set API URL for production build
+                    export VITE_API_URL="${VITE_API_URL:-https://api.example.com}"
+                    
+                    # Build for production
                     npm run build
+                    
+                    echo "✅ Build completed"
+                    ls -la dist/
                 '''
             }
         }
         
         stage('Build Docker Image') {
             steps {
-                echo '🐋 Building Docker image...'
+                echo "🐋 Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
                 sh """
-                    docker build -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} .
-                    docker tag ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} ${DOCKER_IMAGE}:latest
+                    # Build with multiple tags
+                    docker build \
+                        --build-arg VITE_API_URL=\${VITE_API_URL:-https://api.example.com} \
+                        --build-arg BUILD_VERSION=${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        .
+                    
+                    echo "✅ Docker image built successfully"
+                    docker images | grep ${DOCKER_IMAGE}
                 """
             }
         }
@@ -74,25 +225,97 @@ pipeline {
         stage('Push to Registry') {
             steps {
                 echo '📤 Pushing Docker image to registry...'
-                sh """
-                    echo "Image ready: ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
-                    # docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
-                    # docker push ${DOCKER_IMAGE}:latest
-                """
+                sh '''
+                    # Login to Docker Hub
+                    echo "${DOCKER_CREDENTIALS_PSW}" | docker login -u "${DOCKER_CREDENTIALS_USR}" --password-stdin ${DOCKER_REGISTRY}
+                    
+                    # Push all tags
+                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}
+                    docker push ${DOCKER_IMAGE}:latest
+                    
+                    echo "✅ Images pushed successfully"
+                    echo "📦 ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                    echo "📦 ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                    echo "📦 ${DOCKER_IMAGE}:latest"
+                '''
+            }
+        }
+        
+        stage('Trigger Helm Deployment') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo '🚀 Triggering Helm deployment for frontend...'
+                script {
+                    // Trigger Helm pipeline to deploy ONLY frontend
+                    build job: 'helm-deploy',
+                        parameters: [
+                            string(name: 'SERVICE', value: 'frontend'),
+                            string(name: 'IMAGE_TAG', value: env.IMAGE_TAG),
+                            string(name: 'ENVIRONMENT', value: 'dev'),
+                            booleanParam(name: 'DRY_RUN', value: false)
+                        ],
+                        wait: false
+                    
+                    echo "✅ Helm deployment triggered for frontend with tag: ${env.IMAGE_TAG}"
+                }
             }
         }
     }
     
     post {
         success {
-            echo '✅ Frontend pipeline completed successfully!'
+            echo '''
+            ✅ Frontend Pipeline Completed Successfully!
+            ============================================
+            '''
+            echo "🏷️ Version: ${env.IMAGE_TAG}"
+            echo "📦 Image: ${DOCKER_IMAGE}:${env.IMAGE_TAG}"
+            echo "🔗 Git Commit: ${GIT_COMMIT_SHORT}"
+            
+            // Slack notification (uncomment when configured)
+            // slackSend(color: 'good', message: "Frontend build ${env.IMAGE_TAG} succeeded")
         }
         failure {
-            echo '❌ Frontend pipeline failed!'
+            echo '''
+            ❌ Frontend Pipeline Failed!
+            ============================
+            '''
+            echo "Check the logs above for details"
+            
+            // slackSend(color: 'danger', message: "Frontend build failed - ${env.BUILD_URL}")
         }
         always {
-            echo '🧹 Cleaning up workspace...'
+            echo '🧹 Cleaning up...'
+            
+            // Archive artifacts
+            archiveArtifacts artifacts: '**/coverage/**, **/test-results.xml, **/*-report.json',
+                             allowEmptyArchive: true,
+                             fingerprint: true
+            
+            // Cleanup Docker images to save space
+            sh '''
+                docker rmi ${DOCKER_IMAGE}:${IMAGE_TAG} || true
+                docker rmi ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} || true
+            '''
+            
             cleanWs()
         }
     }
+}
+
+/**
+ * Generate a semantic version tag for the Docker image
+ * Format: v{major}.{minor}.{build}-{commit}
+ * Example: v1.0.42-abc1234
+ */
+def generateImageTag() {
+    def major = '1'
+    def minor = '0'
+    def build = env.BUILD_NUMBER
+    def commit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+    
+    return "v${major}.${minor}.${build}-${commit}"
 }

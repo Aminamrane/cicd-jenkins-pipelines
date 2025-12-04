@@ -1,0 +1,328 @@
+/*
+ * Jenkinsfile.helm - Helm Deployment Pipeline
+ * 
+ * This pipeline deploys applications to Kubernetes using Helm charts.
+ * It can be triggered by other pipelines (backend/frontend) or manually.
+ * 
+ * Parameters:
+ *   - SERVICE: Which service to deploy (backend, frontend, or all)
+ *   - IMAGE_TAG: Docker image tag to deploy
+ *   - ENVIRONMENT: Target environment (dev, staging, prod)
+ *   - DRY_RUN: If true, only shows what would be deployed
+ */
+
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'SERVICE',
+            choices: ['all', 'backend', 'frontend'],
+            description: 'Which service to deploy'
+        )
+        string(
+            name: 'IMAGE_TAG',
+            defaultValue: 'latest',
+            description: 'Docker image tag to deploy (e.g., v1.0.0, latest, abc1234)'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        booleanParam(
+            name: 'DRY_RUN',
+            defaultValue: false,
+            description: 'If true, only shows what would be deployed (helm diff)'
+        )
+    }
+    
+    environment {
+        // Helm configuration
+        HELM_RELEASE_NAME = 'app'
+        HELM_NAMESPACE = "app-${params.ENVIRONMENT}"
+        KUBECONFIG = credentials('kubeconfig-credential')
+        
+        // Docker registry
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_ORG = 'aminamrane'
+        
+        // Chart paths
+        CHARTS_DIR = 'charts'
+        BACKEND_CHART = "${CHARTS_DIR}/backend"
+        FRONTEND_CHART = "${CHARTS_DIR}/frontend"
+    }
+    
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    
+    stages {
+        stage('Checkout Helm Charts') {
+            steps {
+                echo "📦 Checking out Helm charts repository..."
+                git branch: 'main',
+                    url: 'https://github.com/Aminamrane/cicd-jenkins-pipelines.git',
+                    credentialsId: 'github-token'
+            }
+        }
+        
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    echo "🔍 Validating deployment parameters..."
+                    echo "   Service: ${params.SERVICE}"
+                    echo "   Image Tag: ${params.IMAGE_TAG}"
+                    echo "   Environment: ${params.ENVIRONMENT}"
+                    echo "   Dry Run: ${params.DRY_RUN}"
+                    
+                    // Validate production deployments
+                    if (params.ENVIRONMENT == 'prod' && params.IMAGE_TAG == 'latest') {
+                        error "❌ Cannot deploy 'latest' tag to production! Please use a versioned tag."
+                    }
+                }
+            }
+        }
+        
+        stage('Setup Kubernetes Context') {
+            steps {
+                script {
+                    echo "⚙️ Setting up Kubernetes context for ${params.ENVIRONMENT}..."
+                    sh """
+                        # Verify cluster connectivity
+                        kubectl cluster-info --kubeconfig=\${KUBECONFIG}
+                        
+                        # Create namespace if it doesn't exist
+                        kubectl create namespace ${HELM_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        echo "✅ Connected to Kubernetes cluster"
+                        kubectl get nodes --kubeconfig=\${KUBECONFIG}
+                    """
+                }
+            }
+        }
+        
+        stage('Lint Helm Charts') {
+            steps {
+                script {
+                    echo "🔍 Linting Helm charts..."
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
+                        sh "helm lint ${BACKEND_CHART}"
+                    }
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
+                        sh "helm lint ${FRONTEND_CHART}"
+                    }
+                    
+                    echo "✅ Helm charts passed linting"
+                }
+            }
+        }
+        
+        stage('Helm Diff (Preview Changes)') {
+            when {
+                expression { return params.DRY_RUN == true }
+            }
+            steps {
+                script {
+                    echo "📋 Previewing deployment changes..."
+                    
+                    def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
+                        echo "--- Backend Changes ---"
+                        sh """
+                            helm diff upgrade ${HELM_RELEASE_NAME}-backend ${BACKEND_CHART} \
+                                --namespace ${HELM_NAMESPACE} \
+                                --values ${valuesFile} \
+                                --set image.tag=${params.IMAGE_TAG} \
+                                --kubeconfig=\${KUBECONFIG} \
+                                || true
+                        """
+                    }
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
+                        echo "--- Frontend Changes ---"
+                        sh """
+                            helm diff upgrade ${HELM_RELEASE_NAME}-frontend ${FRONTEND_CHART} \
+                                --namespace ${HELM_NAMESPACE} \
+                                --values ${valuesFile} \
+                                --set image.tag=${params.IMAGE_TAG} \
+                                --kubeconfig=\${KUBECONFIG} \
+                                || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy Backend') {
+            when {
+                allOf {
+                    expression { return params.DRY_RUN == false }
+                    expression { return params.SERVICE == 'all' || params.SERVICE == 'backend' }
+                }
+            }
+            steps {
+                script {
+                    echo "🚀 Deploying Backend to ${params.ENVIRONMENT}..."
+                    
+                    def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    
+                    sh """
+                        helm upgrade --install ${HELM_RELEASE_NAME}-backend ${BACKEND_CHART} \
+                            --namespace ${HELM_NAMESPACE} \
+                            --values ${valuesFile} \
+                            --set image.repository=${DOCKER_REGISTRY}/${DOCKER_ORG}/fastapi-backend \
+                            --set image.tag=${params.IMAGE_TAG} \
+                            --wait \
+                            --timeout 5m \
+                            --atomic \
+                            --kubeconfig=\${KUBECONFIG}
+                    """
+                    
+                    echo "✅ Backend deployed successfully!"
+                }
+            }
+        }
+        
+        stage('Deploy Frontend') {
+            when {
+                allOf {
+                    expression { return params.DRY_RUN == false }
+                    expression { return params.SERVICE == 'all' || params.SERVICE == 'frontend' }
+                }
+            }
+            steps {
+                script {
+                    echo "🚀 Deploying Frontend to ${params.ENVIRONMENT}..."
+                    
+                    def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    
+                    sh """
+                        helm upgrade --install ${HELM_RELEASE_NAME}-frontend ${FRONTEND_CHART} \
+                            --namespace ${HELM_NAMESPACE} \
+                            --values ${valuesFile} \
+                            --set image.repository=${DOCKER_REGISTRY}/${DOCKER_ORG}/react-frontend \
+                            --set image.tag=${params.IMAGE_TAG} \
+                            --wait \
+                            --timeout 5m \
+                            --atomic \
+                            --kubeconfig=\${KUBECONFIG}
+                    """
+                    
+                    echo "✅ Frontend deployed successfully!"
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            when {
+                expression { return params.DRY_RUN == false }
+            }
+            steps {
+                script {
+                    echo "🔍 Verifying deployment status..."
+                    
+                    sh """
+                        echo "=== Deployment Status ==="
+                        kubectl get deployments -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG}
+                        
+                        echo ""
+                        echo "=== Pod Status ==="
+                        kubectl get pods -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG}
+                        
+                        echo ""
+                        echo "=== Services ==="
+                        kubectl get svc -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG}
+                        
+                        echo ""
+                        echo "=== Ingress ==="
+                        kubectl get ingress -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG}
+                    """
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            when {
+                expression { return params.DRY_RUN == false }
+            }
+            steps {
+                script {
+                    echo "🏥 Running health checks..."
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
+                        sh """
+                            echo "Checking backend health..."
+                            kubectl rollout status deployment/${HELM_RELEASE_NAME}-backend-backend \
+                                -n ${HELM_NAMESPACE} \
+                                --timeout=120s \
+                                --kubeconfig=\${KUBECONFIG}
+                        """
+                    }
+                    
+                    if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
+                        sh """
+                            echo "Checking frontend health..."
+                            kubectl rollout status deployment/${HELM_RELEASE_NAME}-frontend-frontend \
+                                -n ${HELM_NAMESPACE} \
+                                --timeout=120s \
+                                --kubeconfig=\${KUBECONFIG}
+                        """
+                    }
+                    
+                    echo "✅ All health checks passed!"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                if (params.DRY_RUN) {
+                    echo "✅ Dry run completed successfully!"
+                    echo "📋 Review the changes above and re-run with DRY_RUN=false to apply"
+                } else {
+                    echo "✅ Deployment to ${params.ENVIRONMENT} completed successfully!"
+                    echo "🎉 Service(s) deployed: ${params.SERVICE}"
+                    echo "🏷️ Image tag: ${params.IMAGE_TAG}"
+                    
+                    // Could add Slack notification here
+                    // slackSend(color: 'good', message: "Deployed ${params.SERVICE} v${params.IMAGE_TAG} to ${params.ENVIRONMENT}")
+                }
+            }
+        }
+        failure {
+            script {
+                echo "❌ Deployment failed!"
+                echo "🔍 Check the logs above for details"
+                
+                // Rollback on failure (if not dry run)
+                if (!params.DRY_RUN) {
+                    echo "⚠️ Attempting automatic rollback..."
+                    sh """
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "backend" ]; then
+                            helm rollback ${HELM_RELEASE_NAME}-backend -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG} || true
+                        fi
+                        if [ "${params.SERVICE}" = "all" ] || [ "${params.SERVICE}" = "frontend" ]; then
+                            helm rollback ${HELM_RELEASE_NAME}-frontend -n ${HELM_NAMESPACE} --kubeconfig=\${KUBECONFIG} || true
+                        fi
+                    """
+                }
+                
+                // slackSend(color: 'danger', message: "Failed to deploy ${params.SERVICE} to ${params.ENVIRONMENT}")
+            }
+        }
+        always {
+            echo "🧹 Cleaning up workspace..."
+            cleanWs()
+        }
+    }
+}
+

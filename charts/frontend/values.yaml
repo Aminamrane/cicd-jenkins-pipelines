@@ -1,0 +1,117 @@
+# Default values for frontend React application
+# This is a YAML-formatted file.
+
+# -- Number of replicas
+replicaCount: 2
+
+image:
+  # -- Docker image repository
+  repository: aminamrane/react-frontend
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (overridden by CI/CD pipeline)
+  tag: "latest"
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the name of the chart
+nameOverride: ""
+# -- Override the full name of the chart
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+
+# -- Pod security context
+podSecurityContext: {}
+
+# -- Container security context
+securityContext: {}
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port
+  port: 80
+  # -- Target port on the container (nginx)
+  targetPort: 80
+
+ingress:
+  # -- Enable ingress
+  enabled: true
+  # -- Ingress class name
+  className: "traefik"
+  # -- Ingress annotations
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: dashboard.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration
+  tls:
+    - secretName: frontend-tls
+      hosts:
+        - dashboard.example.com
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 128Mi
+
+# -- Liveness probe configuration
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# -- Readiness probe configuration
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+autoscaling:
+  # -- Enable autoscaling
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# -- Environment variables (injected at build time via ConfigMap)
+env: []
+
+# -- ConfigMap for nginx configuration override
+nginxConfigMap: ""
+

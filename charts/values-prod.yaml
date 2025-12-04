@@ -1,0 +1,65 @@
+# Production environment overrides
+# Used for PROD deployments
+
+# Backend overrides
+backend:
+  replicaCount: 3
+  image:
+    tag: "stable"
+  ingress:
+    hosts:
+      - host: api.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: backend-prod-tls
+        hosts:
+          - api.example.com
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  env:
+    - name: ENVIRONMENT
+      value: "production"
+    - name: BACKEND_CORS_ORIGINS
+      value: "https://dashboard.example.com"
+
+# Frontend overrides
+frontend:
+  replicaCount: 3
+  image:
+    tag: "stable"
+  ingress:
+    hosts:
+      - host: dashboard.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: frontend-prod-tls
+        hosts:
+          - dashboard.example.com
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
