@@ -1,16 +1,6 @@
 apiVersion: v2
 name: backend
-description: FastAPI Backend Helm Chart for Kubernetes deployment
+description: FastAPI Backend Helm Chart
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
-keywords:
-  - fastapi
-  - backend
-  - api
-  - python
-maintainers:
-  - name: Amin Amrane
-    email: aminamrane@example.com
-
-

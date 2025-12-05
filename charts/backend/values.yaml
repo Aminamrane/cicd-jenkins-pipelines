@@ -1,69 +1,38 @@
-# Default values for backend FastAPI application
-# This is a YAML-formatted file.
-
-# -- Number of replicas
 replicaCount: 2
 
 image:
-  # -- Docker image repository
-  repository: aminamrane/fastapi-backend
-  # -- Image pull policy
+  repository: aminamr/fastapi-backend
   pullPolicy: IfNotPresent
-  # -- Image tag (overridden by CI/CD pipeline)
   tag: "latest"
 
-# -- Image pull secrets for private registries
 imagePullSecrets: []
-
-# -- Override the name of the chart
 nameOverride: ""
-# -- Override the full name of the chart
 fullnameOverride: ""
 
 serviceAccount:
-  # -- Specifies whether a service account should be created
   create: true
-  # -- Annotations to add to the service account
   annotations: {}
-  # -- The name of the service account to use
   name: ""
 
-# -- Pod annotations
 podAnnotations: {}
-
-# -- Pod security context
 podSecurityContext: {}
-
-# -- Container security context
 securityContext: {}
 
 service:
-  # -- Service type
   type: ClusterIP
-  # -- Service port
   port: 8000
-  # -- Target port on the container
   targetPort: 8000
 
 ingress:
-  # -- Enable ingress
   enabled: true
-  # -- Ingress class name
   className: "traefik"
-  # -- Ingress annotations
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
+  annotations: {}
   hosts:
     - host: api.example.com
       paths:
         - path: /
           pathType: Prefix
-  # -- TLS configuration
-  tls:
-    - secretName: backend-tls
-      hosts:
-        - api.example.com
+  tls: []
 
 resources:
   limits:
@@ -73,66 +42,29 @@ resources:
     cpu: 100m
     memory: 256Mi
 
-# -- Liveness probe configuration
 livenessProbe:
   httpGet:
     path: /api/v1/utils/health-check/
     port: http
   initialDelaySeconds: 30
   periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
 
-# -- Readiness probe configuration
 readinessProbe:
   httpGet:
     path: /api/v1/utils/health-check/
     port: http
   initialDelaySeconds: 5
   periodSeconds: 5
-  timeoutSeconds: 3
-  failureThreshold: 3
 
 autoscaling:
-  # -- Enable autoscaling
   enabled: false
   minReplicas: 2
   maxReplicas: 10
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
 
-# -- Node selector
 nodeSelector: {}
-
-# -- Tolerations
 tolerations: []
-
-# -- Affinity rules
 affinity: {}
 
-# -- Environment variables for the backend
 env:
   - name: ENVIRONMENT
     value: "production"
-  - name: BACKEND_CORS_ORIGINS
-    value: "https://dashboard.example.com"
-
-# -- Environment variables from secrets/configmaps
-envFrom: []
-
-# Database configuration (external PostgreSQL)
-database:
-  # -- PostgreSQL host
-  host: "postgres-service"
-  # -- PostgreSQL port
-  port: 5432
-  # -- PostgreSQL database name
-  name: "app"
-  # -- Existing secret with database credentials
-  existingSecret: "backend-db-credentials"
-  # -- Key in secret for username
-  usernameKey: "username"
-  # -- Key in secret for password
-  passwordKey: "password"
-
-
