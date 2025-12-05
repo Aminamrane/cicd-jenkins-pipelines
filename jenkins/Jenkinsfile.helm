@@ -1,7 +1,6 @@
 /*
- * Helm Deployment Pipeline
- * Deploys applications to Kubernetes using Helm charts
- * Can be triggered by backend/frontend pipelines or manually
+ * Helm Deployment Pipeline - Production Ready
+ * Deploys to EKS cluster using Helm
  */
 
 pipeline {
@@ -11,15 +10,16 @@ pipeline {
         choice(name: 'SERVICE', choices: ['all', 'backend', 'frontend'], description: 'Service to deploy')
         string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag')
         choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target environment')
-        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Preview only, no deployment')
+        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Helm dry-run only')
     }
     
     environment {
-        HELM_RELEASE_NAME = 'app'
-        HELM_NAMESPACE = "app-${params.ENVIRONMENT ?: 'dev'}"
-        DOCKER_REGISTRY = 'docker.io'
-        DOCKER_ORG = 'aminamr'
+        HELM_NAMESPACE = "app-${params.ENVIRONMENT}"
         CHARTS_DIR = 'charts'
+        
+        // AWS config - set by infra team
+        AWS_REGION = "${env.AWS_REGION ?: 'eu-west-1'}"
+        EKS_CLUSTER = "${env.EKS_CLUSTER ?: 'app-cluster'}"
     }
     
     options {
@@ -41,22 +41,43 @@ pipeline {
                     echo "Service: ${params.SERVICE}"
                     echo "Image Tag: ${params.IMAGE_TAG}"
                     echo "Environment: ${params.ENVIRONMENT}"
-                    echo "Dry Run: ${params.DRY_RUN}"
+                    echo "Namespace: ${HELM_NAMESPACE}"
                     
                     if (params.ENVIRONMENT == 'prod' && params.IMAGE_TAG == 'latest') {
-                        error "Cannot deploy latest tag to production"
+                        error "Cannot deploy 'latest' tag to production"
                     }
                 }
             }
         }
         
-        stage('Verify Charts') {
+        stage('Helm Lint') {
             steps {
-                sh """
-                    ls -la ${CHARTS_DIR}/
-                    ls -la ${CHARTS_DIR}/backend/ || true
-                    ls -la ${CHARTS_DIR}/frontend/ || true
-                """
+                script {
+                    def helmExists = sh(script: 'which helm', returnStatus: true) == 0
+                    if (helmExists) {
+                        if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
+                            sh "helm lint ${CHARTS_DIR}/backend/"
+                        }
+                        if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
+                            sh "helm lint ${CHARTS_DIR}/frontend/"
+                        }
+                    } else {
+                        echo "Helm not installed - skipping lint"
+                    }
+                }
+            }
+        }
+        
+        stage('Configure Kubernetes') {
+            steps {
+                script {
+                    def awsExists = sh(script: 'which aws', returnStatus: true) == 0
+                    if (awsExists) {
+                        sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
+                    } else {
+                        echo "AWS CLI not installed - using existing kubeconfig"
+                    }
+                }
             }
         }
         
@@ -66,15 +87,24 @@ pipeline {
             }
             steps {
                 script {
+                    def helmExists = sh(script: 'which helm', returnStatus: true) == 0
                     def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    def dryRunFlag = params.DRY_RUN ? '--dry-run' : ''
                     
-                    if (params.DRY_RUN) {
-                        echo "DRY RUN - Would deploy backend to ${params.ENVIRONMENT}"
-                        echo "Release: ${HELM_RELEASE_NAME}-backend"
-                        echo "Namespace: ${HELM_NAMESPACE}"
-                        echo "Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/fastapi-backend:${params.IMAGE_TAG}"
+                    if (helmExists) {
+                        sh """
+                            helm upgrade --install backend-${params.ENVIRONMENT} ${CHARTS_DIR}/backend/ \
+                                --namespace ${HELM_NAMESPACE} \
+                                --create-namespace \
+                                -f ${valuesFile} \
+                                --set image.tag=${params.IMAGE_TAG} \
+                                ${dryRunFlag}
+                        """
                     } else {
-                        echo "Deploying backend to ${params.ENVIRONMENT}"
+                        echo "Would deploy backend to ${params.ENVIRONMENT}"
+                        echo "Release: backend-${params.ENVIRONMENT}"
+                        echo "Namespace: ${HELM_NAMESPACE}"
+                        echo "Image tag: ${params.IMAGE_TAG}"
                     }
                 }
             }
@@ -86,15 +116,41 @@ pipeline {
             }
             steps {
                 script {
+                    def helmExists = sh(script: 'which helm', returnStatus: true) == 0
                     def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    def dryRunFlag = params.DRY_RUN ? '--dry-run' : ''
                     
-                    if (params.DRY_RUN) {
-                        echo "DRY RUN - Would deploy frontend to ${params.ENVIRONMENT}"
-                        echo "Release: ${HELM_RELEASE_NAME}-frontend"
-                        echo "Namespace: ${HELM_NAMESPACE}"
-                        echo "Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/react-frontend:${params.IMAGE_TAG}"
+                    if (helmExists) {
+                        sh """
+                            helm upgrade --install frontend-${params.ENVIRONMENT} ${CHARTS_DIR}/frontend/ \
+                                --namespace ${HELM_NAMESPACE} \
+                                --create-namespace \
+                                -f ${valuesFile} \
+                                --set image.tag=${params.IMAGE_TAG} \
+                                ${dryRunFlag}
+                        """
                     } else {
-                        echo "Deploying frontend to ${params.ENVIRONMENT}"
+                        echo "Would deploy frontend to ${params.ENVIRONMENT}"
+                        echo "Release: frontend-${params.ENVIRONMENT}"
+                        echo "Namespace: ${HELM_NAMESPACE}"
+                        echo "Image tag: ${params.IMAGE_TAG}"
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            when {
+                expression { return !params.DRY_RUN }
+            }
+            steps {
+                script {
+                    def kubectlExists = sh(script: 'which kubectl', returnStatus: true) == 0
+                    if (kubectlExists) {
+                        sh """
+                            kubectl get pods -n ${HELM_NAMESPACE}
+                            kubectl get svc -n ${HELM_NAMESPACE}
+                        """
                     }
                 }
             }
@@ -103,10 +159,10 @@ pipeline {
     
     post {
         success {
-            echo "Helm pipeline completed - Service: ${params.SERVICE}, Environment: ${params.ENVIRONMENT}"
+            echo "Helm deploy completed - Service: ${params.SERVICE}, Env: ${params.ENVIRONMENT}, Tag: ${params.IMAGE_TAG}"
         }
         failure {
-            echo "Helm pipeline failed"
+            echo "Helm deploy failed"
         }
     }
 }

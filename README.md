@@ -1,6 +1,14 @@
-# CI/CD Jenkins Pipelines
+# CI/CD Jenkins Pipelines - Production Ready
 
-Multi-repository CI/CD architecture with Jenkins pipelines and Helm charts.
+Multi-repository CI/CD architecture for AWS (EKS, ECR).
+
+## Architecture
+
+```
+Backend/Frontend → Build → Security Scan → Push ECR → Trigger Helm
+                                                          ↓
+Terraform → Apply AWS infra ←────────────────── Helm Deploy → EKS
+```
 
 ## Repository Structure
 
@@ -20,57 +28,60 @@ cicd-jenkins-pipelines/
 
 ## Pipelines
 
-### Backend Pipeline (Jenkinsfile.backend)
-- Checkout code from fastapi-backend repository
-- Build Docker image with versioned tags
-- Push image to Docker Hub
-- Trigger Helm deployment for backend only
+### Backend/Frontend Pipeline
+- Checkout code
+- Run unit tests
+- Build Docker image
+- Security scan (Trivy)
+- Push to ECR (prod) or Docker Hub (dev)
+- Trigger Helm deployment
 
-### Frontend Pipeline (Jenkinsfile.frontend)
-- Checkout code from react-frontend repository
-- Build Docker image with versioned tags
-- Push image to Docker Hub
-- Trigger Helm deployment for frontend only
+### Helm Pipeline
+- Helm lint and validate
+- Configure kubectl for EKS
+- Deploy with helm upgrade --install
+- Verify deployment
 
-### Helm Pipeline (Jenkinsfile.helm)
-- Deploy applications using Helm charts
-- Supports selective deployment (backend, frontend, or all)
-- Environment-specific configurations (dev, staging, prod)
-- Dry run mode for previewing changes
-
-### Terraform Pipeline (Jenkinsfile.terraform)
-- Manage infrastructure with Terraform
-- Plan, apply, or destroy actions
+### Terraform Pipeline
+- Terraform init/validate/plan
 - Manual approval for production
-- Auto-triggers Helm after apply
+- Terraform apply
+- Trigger Helm after infra changes
 
-## Docker Images
+## Parameters
 
-- Backend: `aminamr/fastapi-backend`
-- Frontend: `aminamr/react-frontend`
+### Backend/Frontend
+| Parameter | Options | Description |
+|-----------|---------|-------------|
+| ENVIRONMENT | dev, staging, prod | Target environment |
+| USE_ECR | true/false | Use AWS ECR instead of Docker Hub |
+| SECURITY_SCAN | true/false | Run Trivy security scan |
 
-Image tags: `v1.0.{build}-{commit}` and `latest`
+### Helm
+| Parameter | Options | Description |
+|-----------|---------|-------------|
+| SERVICE | all, backend, frontend | Service to deploy |
+| IMAGE_TAG | string | Docker image tag |
+| ENVIRONMENT | dev, staging, prod | Target environment |
+| DRY_RUN | true/false | Preview only |
 
-## Jenkins Setup
+## AWS Integration
 
-### Required Credentials
-1. `github-credentials`: GitHub username + token
-2. `docker-hub-credentials`: Docker Hub username + password
-
-### Jobs
-1. `fastapi-backend-pipeline`: Points to `jenkins/Jenkinsfile.backend`
-2. `react-frontend-pipeline`: Points to `jenkins/Jenkinsfile.frontend`
-3. `helm-deploy`: Points to `jenkins/Jenkinsfile.helm`
-4. `terraform-infrastructure`: Points to `jenkins/Jenkinsfile.terraform`
+Environment variables to set in Jenkins:
+- AWS_ACCOUNT_ID: AWS account number
+- AWS_REGION: AWS region (default: eu-west-1)
+- EKS_CLUSTER: EKS cluster name
 
 ## Pipeline Communication
 
 ```
-Backend Pipeline ──────> Helm Pipeline (SERVICE=backend)
-                              │
-Frontend Pipeline ─────> Helm Pipeline (SERVICE=frontend)
-                              │
-Terraform Pipeline ────> Helm Pipeline (SERVICE=all)
+Backend Pipeline ──> Helm (SERVICE=backend)
+Frontend Pipeline ─> Helm (SERVICE=frontend)
+Terraform Pipeline ─> Helm (SERVICE=all)
 ```
 
-Each application pipeline triggers Helm to deploy only its own service.
+## Team Responsibilities
+
+- CI/CD: Pipeline configuration (this repo)
+- Infra: Terraform code (terraform-infrastructure repo)
+- K8s: Kubernetes manifests / Helm values

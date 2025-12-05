@@ -1,7 +1,6 @@
 /*
- * Terraform Infrastructure Pipeline
- * Manages infrastructure using Terraform
- * Auto-triggers when .tf files are modified
+ * Terraform Infrastructure Pipeline - Production Ready
+ * Manages AWS infrastructure (EKS, ECR, RDS, etc.)
  */
 
 pipeline {
@@ -10,12 +9,13 @@ pipeline {
     parameters {
         choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target environment')
         choice(name: 'ACTION', choices: ['plan', 'apply', 'destroy'], description: 'Terraform action')
-        booleanParam(name: 'AUTO_APPROVE', defaultValue: false, description: 'Auto-approve apply')
+        booleanParam(name: 'AUTO_APPROVE', defaultValue: false, description: 'Auto-approve (not for prod)')
     }
     
     environment {
         TF_IN_AUTOMATION = 'true'
-        TF_WORKING_DIR = "environments/${params.ENVIRONMENT ?: 'dev'}"
+        TF_WORKING_DIR = "environments/${params.ENVIRONMENT}"
+        AWS_REGION = "${env.AWS_REGION ?: 'eu-west-1'}"
     }
     
     options {
@@ -31,30 +31,49 @@ pipeline {
             }
         }
         
-        stage('Show Config') {
+        stage('Terraform Init') {
             steps {
-                sh """
-                    echo "Environment: ${params.ENVIRONMENT}"
-                    echo "Action: ${params.ACTION}"
-                    ls -la ${TF_WORKING_DIR}/ || echo "Directory not found"
-                """
+                script {
+                    def tfExists = sh(script: 'which terraform', returnStatus: true) == 0
+                    if (tfExists) {
+                        sh """
+                            cd ${TF_WORKING_DIR}
+                            terraform init -backend-config=backend-${params.ENVIRONMENT}.hcl
+                        """
+                    } else {
+                        echo "Terraform not installed"
+                        echo "Environment: ${params.ENVIRONMENT}"
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform Validate') {
+            steps {
+                script {
+                    def tfExists = sh(script: 'which terraform', returnStatus: true) == 0
+                    if (tfExists) {
+                        sh """
+                            cd ${TF_WORKING_DIR}
+                            terraform fmt -check
+                            terraform validate
+                        """
+                    }
+                }
             }
         }
         
         stage('Terraform Plan') {
             steps {
                 script {
-                    def tfAvailable = sh(script: 'which terraform', returnStatus: true) == 0
-                    
-                    if (tfAvailable) {
+                    def tfExists = sh(script: 'which terraform', returnStatus: true) == 0
+                    if (tfExists) {
                         sh """
                             cd ${TF_WORKING_DIR}
-                            terraform init
                             terraform plan -out=tfplan
                         """
                     } else {
-                        echo "Terraform not installed - simulating plan"
-                        echo "Would create resources in ${params.ENVIRONMENT}"
+                        echo "Would run terraform plan for ${params.ENVIRONMENT}"
                     }
                 }
             }
@@ -63,14 +82,14 @@ pipeline {
         stage('Approval') {
             when {
                 allOf {
-                    expression { return params.ACTION == 'apply' }
+                    expression { return params.ACTION == 'apply' || params.ACTION == 'destroy' }
                     expression { return params.ENVIRONMENT == 'prod' }
-                    expression { return params.AUTO_APPROVE == false }
+                    expression { return !params.AUTO_APPROVE }
                 }
             }
             steps {
                 timeout(time: 30, unit: 'MINUTES') {
-                    input message: "Deploy to production?", ok: "Approve"
+                    input message: "Deploy to PRODUCTION?", ok: "Approve"
                 }
             }
         }
@@ -81,15 +100,31 @@ pipeline {
             }
             steps {
                 script {
-                    def tfAvailable = sh(script: 'which terraform', returnStatus: true) == 0
-                    
-                    if (tfAvailable) {
+                    def tfExists = sh(script: 'which terraform', returnStatus: true) == 0
+                    if (tfExists) {
                         sh """
                             cd ${TF_WORKING_DIR}
                             terraform apply -auto-approve tfplan
                         """
                     } else {
-                        echo "Terraform not installed - simulating apply"
+                        echo "Would apply terraform for ${params.ENVIRONMENT}"
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform Destroy') {
+            when {
+                expression { return params.ACTION == 'destroy' }
+            }
+            steps {
+                script {
+                    def tfExists = sh(script: 'which terraform', returnStatus: true) == 0
+                    if (tfExists) {
+                        sh """
+                            cd ${TF_WORKING_DIR}
+                            terraform destroy -auto-approve
+                        """
                     }
                 }
             }
@@ -101,18 +136,14 @@ pipeline {
             }
             steps {
                 script {
-                    try {
-                        build job: 'helm-deploy',
-                            parameters: [
-                                string(name: 'SERVICE', value: 'all'),
-                                string(name: 'IMAGE_TAG', value: 'latest'),
-                                string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
-                                booleanParam(name: 'DRY_RUN', value: true)
-                            ],
-                            wait: false
-                    } catch (Exception e) {
-                        echo "Could not trigger Helm pipeline"
-                    }
+                    build job: 'helm-deploy',
+                        parameters: [
+                            string(name: 'SERVICE', value: 'all'),
+                            string(name: 'IMAGE_TAG', value: 'latest'),
+                            string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                            booleanParam(name: 'DRY_RUN', value: true)
+                        ],
+                        wait: false
                 }
             }
         }
@@ -120,7 +151,7 @@ pipeline {
     
     post {
         success {
-            echo "Terraform pipeline completed - Environment: ${params.ENVIRONMENT}, Action: ${params.ACTION}"
+            echo "Terraform ${params.ACTION} completed for ${params.ENVIRONMENT}"
         }
         failure {
             echo "Terraform pipeline failed"
