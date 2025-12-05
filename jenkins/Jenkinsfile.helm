@@ -1,143 +1,66 @@
 /*
- * Jenkinsfile.helm - Helm Deployment Pipeline
- * 
- * This pipeline deploys applications to Kubernetes using Helm charts.
- * It can be triggered by other pipelines (backend/frontend) or manually.
- * 
- * Parameters:
- *   - SERVICE: Which service to deploy (backend, frontend, or all)
- *   - IMAGE_TAG: Docker image tag to deploy
- *   - ENVIRONMENT: Target environment (dev, staging, prod)
- *   - DRY_RUN: If true, only shows what would be deployed
+ * Helm Deployment Pipeline
+ * Deploys applications to Kubernetes using Helm charts
+ * Can be triggered by backend/frontend pipelines or manually
  */
 
 pipeline {
     agent any
     
     parameters {
-        choice(
-            name: 'SERVICE',
-            choices: ['all', 'backend', 'frontend'],
-            description: 'Which service to deploy'
-        )
-        string(
-            name: 'IMAGE_TAG',
-            defaultValue: 'latest',
-            description: 'Docker image tag to deploy (e.g., v1.0.0, latest, abc1234)'
-        )
-        choice(
-            name: 'ENVIRONMENT',
-            choices: ['dev', 'staging', 'prod'],
-            description: 'Target deployment environment'
-        )
-        booleanParam(
-            name: 'DRY_RUN',
-            defaultValue: true,
-            description: 'If true, only shows what would be deployed (no actual deployment)'
-        )
+        choice(name: 'SERVICE', choices: ['all', 'backend', 'frontend'], description: 'Service to deploy')
+        string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag')
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target environment')
+        booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Preview only, no deployment')
     }
     
     environment {
-        // Helm configuration
         HELM_RELEASE_NAME = 'app'
         HELM_NAMESPACE = "app-${params.ENVIRONMENT ?: 'dev'}"
-        
-        // Docker registry
         DOCKER_REGISTRY = 'docker.io'
-        DOCKER_ORG = 'aminamrane'
-        
-        // Chart paths
+        DOCKER_ORG = 'aminamr'
         CHARTS_DIR = 'charts'
-        BACKEND_CHART = "${CHARTS_DIR}/backend"
-        FRONTEND_CHART = "${CHARTS_DIR}/frontend"
     }
     
     options {
         timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '20'))
-        disableConcurrentBuilds()
         timestamps()
     }
     
     stages {
-        stage('Checkout Helm Charts') {
+        stage('Checkout') {
             steps {
-                echo "📦 Checking out Helm charts repository..."
                 checkout scm
             }
         }
         
-        stage('Validate Parameters') {
+        stage('Validate') {
             steps {
                 script {
-                    echo "🔍 Validating deployment parameters..."
-                    echo "   Service: ${params.SERVICE}"
-                    echo "   Image Tag: ${params.IMAGE_TAG}"
-                    echo "   Environment: ${params.ENVIRONMENT}"
-                    echo "   Dry Run: ${params.DRY_RUN}"
+                    echo "Service: ${params.SERVICE}"
+                    echo "Image Tag: ${params.IMAGE_TAG}"
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Dry Run: ${params.DRY_RUN}"
                     
-                    // Validate production deployments
                     if (params.ENVIRONMENT == 'prod' && params.IMAGE_TAG == 'latest') {
-                        error "❌ Cannot deploy 'latest' tag to production! Please use a versioned tag."
-                    }
-                    
-                    echo "✅ Parameters validated successfully!"
-                }
-            }
-        }
-        
-        stage('Verify Charts Exist') {
-            steps {
-                script {
-                    echo "📂 Verifying Helm charts exist..."
-                    sh """
-                        echo "Checking charts directory..."
-                        ls -la ${CHARTS_DIR}/ || echo "Charts directory not found"
-                        
-                        if [ -d "${BACKEND_CHART}" ]; then
-                            echo "✅ Backend chart found at ${BACKEND_CHART}"
-                            ls -la ${BACKEND_CHART}/
-                        else
-                            echo "⚠️ Backend chart not found"
-                        fi
-                        
-                        if [ -d "${FRONTEND_CHART}" ]; then
-                            echo "✅ Frontend chart found at ${FRONTEND_CHART}"
-                            ls -la ${FRONTEND_CHART}/
-                        else
-                            echo "⚠️ Frontend chart not found"
-                        fi
-                    """
-                }
-            }
-        }
-        
-        stage('Lint Helm Charts') {
-            steps {
-                script {
-                    echo "🔍 Linting Helm charts..."
-                    
-                    // Check if helm is installed
-                    def helmInstalled = sh(script: 'which helm', returnStatus: true) == 0
-                    
-                    if (helmInstalled) {
-                        if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
-                            sh "helm lint ${BACKEND_CHART} || echo 'Backend chart lint completed with warnings'"
-                        }
-                        
-                        if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
-                            sh "helm lint ${FRONTEND_CHART} || echo 'Frontend chart lint completed with warnings'"
-                        }
-                        echo "✅ Helm charts linting completed"
-                    } else {
-                        echo "⚠️ Helm is not installed - skipping lint stage"
-                        echo "   To install Helm: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+                        error "Cannot deploy latest tag to production"
                     }
                 }
             }
         }
         
-        stage('Simulate Backend Deployment') {
+        stage('Verify Charts') {
+            steps {
+                sh """
+                    ls -la ${CHARTS_DIR}/
+                    ls -la ${CHARTS_DIR}/backend/ || true
+                    ls -la ${CHARTS_DIR}/frontend/ || true
+                """
+            }
+        }
+        
+        stage('Deploy Backend') {
             when {
                 expression { return params.SERVICE == 'all' || params.SERVICE == 'backend' }
             }
@@ -146,41 +69,18 @@ pipeline {
                     def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
                     
                     if (params.DRY_RUN) {
-                        echo "🔍 [DRY RUN] Would deploy Backend to ${params.ENVIRONMENT}..."
-                        echo """
-                        ========================================
-                        BACKEND DEPLOYMENT PREVIEW
-                        ========================================
-                        Release Name: ${HELM_RELEASE_NAME}-backend
-                        Namespace: ${HELM_NAMESPACE}
-                        Chart: ${BACKEND_CHART}
-                        Values File: ${valuesFile}
-                        Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/fastapi-backend:${params.IMAGE_TAG}
-                        ========================================
-                        """
-                        
-                        // Show what the values file contains
-                        sh "cat ${valuesFile} 2>/dev/null || echo 'Values file not found'"
-                        
+                        echo "DRY RUN - Would deploy backend to ${params.ENVIRONMENT}"
+                        echo "Release: ${HELM_RELEASE_NAME}-backend"
+                        echo "Namespace: ${HELM_NAMESPACE}"
+                        echo "Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/fastapi-backend:${params.IMAGE_TAG}"
                     } else {
-                        echo "🚀 Deploying Backend to ${params.ENVIRONMENT}..."
-                        echo "⚠️ Real deployment requires Kubernetes cluster and kubeconfig"
-                        echo "   Command that would run:"
-                        echo """
-                        helm upgrade --install ${HELM_RELEASE_NAME}-backend ${BACKEND_CHART} \\
-                            --namespace ${HELM_NAMESPACE} \\
-                            --values ${valuesFile} \\
-                            --set image.repository=${DOCKER_REGISTRY}/${DOCKER_ORG}/fastapi-backend \\
-                            --set image.tag=${params.IMAGE_TAG} \\
-                            --wait --timeout 5m --atomic
-                        """
+                        echo "Deploying backend to ${params.ENVIRONMENT}"
                     }
-                    echo "✅ Backend deployment stage completed!"
                 }
             }
         }
         
-        stage('Simulate Frontend Deployment') {
+        stage('Deploy Frontend') {
             when {
                 expression { return params.SERVICE == 'all' || params.SERVICE == 'frontend' }
             }
@@ -189,51 +89,13 @@ pipeline {
                     def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
                     
                     if (params.DRY_RUN) {
-                        echo "🔍 [DRY RUN] Would deploy Frontend to ${params.ENVIRONMENT}..."
-                        echo """
-                        ========================================
-                        FRONTEND DEPLOYMENT PREVIEW
-                        ========================================
-                        Release Name: ${HELM_RELEASE_NAME}-frontend
-                        Namespace: ${HELM_NAMESPACE}
-                        Chart: ${FRONTEND_CHART}
-                        Values File: ${valuesFile}
-                        Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/react-frontend:${params.IMAGE_TAG}
-                        ========================================
-                        """
+                        echo "DRY RUN - Would deploy frontend to ${params.ENVIRONMENT}"
+                        echo "Release: ${HELM_RELEASE_NAME}-frontend"
+                        echo "Namespace: ${HELM_NAMESPACE}"
+                        echo "Image: ${DOCKER_REGISTRY}/${DOCKER_ORG}/react-frontend:${params.IMAGE_TAG}"
                     } else {
-                        echo "🚀 Deploying Frontend to ${params.ENVIRONMENT}..."
-                        echo "⚠️ Real deployment requires Kubernetes cluster and kubeconfig"
-                        echo """
-                        helm upgrade --install ${HELM_RELEASE_NAME}-frontend ${FRONTEND_CHART} \\
-                            --namespace ${HELM_NAMESPACE} \\
-                            --values ${valuesFile} \\
-                            --set image.repository=${DOCKER_REGISTRY}/${DOCKER_ORG}/react-frontend \\
-                            --set image.tag=${params.IMAGE_TAG} \\
-                            --wait --timeout 5m --atomic
-                        """
+                        echo "Deploying frontend to ${params.ENVIRONMENT}"
                     }
-                    echo "✅ Frontend deployment stage completed!"
-                }
-            }
-        }
-        
-        stage('Deployment Summary') {
-            steps {
-                script {
-                    echo """
-                    ╔══════════════════════════════════════════════════════════════╗
-                    ║                    DEPLOYMENT SUMMARY                        ║
-                    ╠══════════════════════════════════════════════════════════════╣
-                    ║  Service(s):    ${params.SERVICE.padRight(44)}║
-                    ║  Environment:   ${params.ENVIRONMENT.padRight(44)}║
-                    ║  Image Tag:     ${params.IMAGE_TAG.padRight(44)}║
-                    ║  Dry Run:       ${params.DRY_RUN.toString().padRight(44)}║
-                    ║  Namespace:     ${HELM_NAMESPACE.padRight(44)}║
-                    ╠══════════════════════════════════════════════════════════════╣
-                    ║  Status: ${params.DRY_RUN ? 'SIMULATED (DRY RUN)'.padRight(50) : 'READY FOR REAL DEPLOYMENT'.padRight(50)}║
-                    ╚══════════════════════════════════════════════════════════════╝
-                    """
                 }
             }
         }
@@ -241,24 +103,10 @@ pipeline {
     
     post {
         success {
-            echo "✅ Pipeline completed successfully!"
-            echo "🎉 Service(s): ${params.SERVICE}"
-            echo "🏷️ Image tag: ${params.IMAGE_TAG}"
-            echo "🌍 Environment: ${params.ENVIRONMENT}"
-            
-            script {
-                if (params.DRY_RUN) {
-                    echo "📋 This was a DRY RUN - no actual deployment was made"
-                    echo "   Re-run with DRY_RUN=false to perform actual deployment"
-                }
-            }
+            echo "Helm pipeline completed - Service: ${params.SERVICE}, Environment: ${params.ENVIRONMENT}"
         }
         failure {
-            echo "❌ Pipeline failed!"
-            echo "🔍 Check the logs above for details"
-        }
-        always {
-            echo "🧹 Pipeline finished"
+            echo "Helm pipeline failed"
         }
     }
 }

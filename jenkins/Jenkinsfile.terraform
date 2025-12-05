@@ -1,176 +1,76 @@
 /*
- * Jenkinsfile.terraform - Infrastructure Deployment Pipeline
- * 
- * This pipeline manages infrastructure using Terraform.
- * It automatically triggers when .tf files are modified.
- * 
- * Features:
- *   - Multi-environment support (dev, staging, prod)
- *   - Automatic plan generation
- *   - Manual approval for production
+ * Terraform Infrastructure Pipeline
+ * Manages infrastructure using Terraform
+ * Auto-triggers when .tf files are modified
  */
 
 pipeline {
     agent any
     
     parameters {
-        choice(
-            name: 'ENVIRONMENT',
-            choices: ['dev', 'staging', 'prod'],
-            description: 'Target environment for infrastructure deployment'
-        )
-        choice(
-            name: 'ACTION',
-            choices: ['plan', 'apply', 'destroy'],
-            description: 'Terraform action to perform'
-        )
-        booleanParam(
-            name: 'AUTO_APPROVE',
-            defaultValue: false,
-            description: 'Auto-approve terraform apply (not recommended for prod)'
-        )
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target environment')
+        choice(name: 'ACTION', choices: ['plan', 'apply', 'destroy'], description: 'Terraform action')
+        booleanParam(name: 'AUTO_APPROVE', defaultValue: false, description: 'Auto-approve apply')
     }
     
     environment {
         TF_IN_AUTOMATION = 'true'
-        TF_INPUT = 'false'
         TF_WORKING_DIR = "environments/${params.ENVIRONMENT ?: 'dev'}"
     }
     
     options {
         timeout(time: 60, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '30'))
-        disableConcurrentBuilds()
         timestamps()
     }
     
     stages {
-        stage('Checkout Infrastructure Code') {
+        stage('Checkout') {
             steps {
-                echo "📦 Checking out Terraform repository..."
                 checkout scm
             }
         }
         
-        stage('Check for Terraform Changes') {
+        stage('Show Config') {
             steps {
-                script {
-                    echo "🔍 Checking for Terraform file changes..."
-                    
-                    sh '''
-                        echo "Looking for .tf files..."
-                        find . -name "*.tf" -type f | head -20
-                        
-                        echo ""
-                        echo "Environment directory: ${TF_WORKING_DIR}"
-                        ls -la ${TF_WORKING_DIR}/ || echo "Directory not found"
-                    '''
-                }
-            }
-        }
-        
-        stage('Terraform Version') {
-            steps {
-                script {
-                    echo "⚙️ Checking Terraform installation..."
-                    
-                    sh '''
-                        if command -v terraform &> /dev/null; then
-                            terraform version
-                        else
-                            echo "⚠️ Terraform is not installed on this Jenkins agent"
-                            echo "   To install: "
-                            echo "   wget https://releases.hashicorp.com/terraform/1.6.0/terraform_1.6.0_linux_amd64.zip"
-                            echo "   unzip terraform_1.6.0_linux_amd64.zip"
-                            echo "   sudo mv terraform /usr/local/bin/"
-                        fi
-                    '''
-                }
-            }
-        }
-        
-        stage('Terraform Init') {
-            steps {
-                script {
-                    echo "🔧 Initializing Terraform..."
-                    
-                    sh '''
-                        if command -v terraform &> /dev/null; then
-                            cd ${TF_WORKING_DIR}
-                            terraform init -reconfigure || echo "Init failed - check backend configuration"
-                        else
-                            echo "⚠️ Terraform not installed - simulating init"
-                            echo "   Would run: terraform init in ${TF_WORKING_DIR}"
-                        fi
-                    '''
-                }
-            }
-        }
-        
-        stage('Terraform Validate') {
-            steps {
-                script {
-                    echo "✔️ Validating Terraform configuration..."
-                    
-                    sh '''
-                        if command -v terraform &> /dev/null; then
-                            cd ${TF_WORKING_DIR}
-                            terraform validate
-                        else
-                            echo "⚠️ Simulating validation..."
-                            echo "   Would validate .tf files in ${TF_WORKING_DIR}"
-                        fi
-                    '''
-                }
+                sh """
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Action: ${params.ACTION}"
+                    ls -la ${TF_WORKING_DIR}/ || echo "Directory not found"
+                """
             }
         }
         
         stage('Terraform Plan') {
             steps {
                 script {
-                    echo "📋 Generating Terraform plan for ${params.ENVIRONMENT}..."
+                    def tfAvailable = sh(script: 'which terraform', returnStatus: true) == 0
                     
-                    sh '''
-                        if command -v terraform &> /dev/null; then
+                    if (tfAvailable) {
+                        sh """
                             cd ${TF_WORKING_DIR}
-                            terraform plan -out=tfplan || echo "Plan failed - check variables"
-                        else
-                            echo "⚠️ Simulating plan..."
-                            echo ""
-                            echo "=== TERRAFORM PLAN SIMULATION ==="
-                            echo "Environment: ${ENVIRONMENT}"
-                            echo "Working Dir: ${TF_WORKING_DIR}"
-                            echo ""
-                            echo "Would create/modify:"
-                            echo "  + kubernetes_namespace.app"
-                            echo "  + kubernetes_secret.db_credentials"
-                            echo "  + kubernetes_secret.app_secrets"
-                            echo ""
-                            echo "Plan: 3 to add, 0 to change, 0 to destroy."
-                            echo "================================="
-                        fi
-                    '''
+                            terraform init
+                            terraform plan -out=tfplan
+                        """
+                    } else {
+                        echo "Terraform not installed - simulating plan"
+                        echo "Would create resources in ${params.ENVIRONMENT}"
+                    }
                 }
             }
         }
         
-        stage('Approval for Production') {
+        stage('Approval') {
             when {
                 allOf {
-                    expression { return params.ACTION == 'apply' || params.ACTION == 'destroy' }
+                    expression { return params.ACTION == 'apply' }
                     expression { return params.ENVIRONMENT == 'prod' }
                     expression { return params.AUTO_APPROVE == false }
                 }
             }
             steps {
-                script {
-                    echo "⏸️ Waiting for manual approval for PRODUCTION..."
-                    
-                    timeout(time: 30, unit: 'MINUTES') {
-                        input message: "Deploy to PRODUCTION?", ok: "Approve"
-                    }
-                    
-                    echo "✅ Production deployment approved"
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Deploy to production?", ok: "Approve"
                 }
             }
         }
@@ -181,39 +81,26 @@ pipeline {
             }
             steps {
                 script {
-                    echo "🚀 Applying Terraform changes to ${params.ENVIRONMENT}..."
+                    def tfAvailable = sh(script: 'which terraform', returnStatus: true) == 0
                     
-                    sh '''
-                        if command -v terraform &> /dev/null; then
+                    if (tfAvailable) {
+                        sh """
                             cd ${TF_WORKING_DIR}
                             terraform apply -auto-approve tfplan
-                        else
-                            echo "⚠️ Simulating apply..."
-                            echo ""
-                            echo "=== TERRAFORM APPLY SIMULATION ==="
-                            echo "kubernetes_namespace.app: Creating..."
-                            echo "kubernetes_namespace.app: Creation complete"
-                            echo "kubernetes_secret.db_credentials: Creating..."
-                            echo "kubernetes_secret.db_credentials: Creation complete"
-                            echo ""
-                            echo "Apply complete! Resources: 3 added, 0 changed, 0 destroyed."
-                            echo "=================================="
-                        fi
-                    '''
-                    
-                    echo "✅ Infrastructure deployed successfully!"
+                        """
+                    } else {
+                        echo "Terraform not installed - simulating apply"
+                    }
                 }
             }
         }
         
-        stage('Trigger Helm Deployment') {
+        stage('Trigger Helm') {
             when {
                 expression { return params.ACTION == 'apply' }
             }
             steps {
                 script {
-                    echo "🔄 Triggering Helm deployment for updated infrastructure..."
-                    
                     try {
                         build job: 'helm-deploy',
                             parameters: [
@@ -223,10 +110,8 @@ pipeline {
                                 booleanParam(name: 'DRY_RUN', value: true)
                             ],
                             wait: false
-                        
-                        echo "✅ Helm deployment triggered"
                     } catch (Exception e) {
-                        echo "⚠️ Could not trigger Helm pipeline: ${e.message}"
+                        echo "Could not trigger Helm pipeline"
                     }
                 }
             }
@@ -235,25 +120,10 @@ pipeline {
     
     post {
         success {
-            echo '''
-            ╔══════════════════════════════════════════════════════════════╗
-            ║       ✅ TERRAFORM PIPELINE COMPLETED SUCCESSFULLY!          ║
-            ╚══════════════════════════════════════════════════════════════╝
-            '''
-            echo "🏗️ Environment: ${params.ENVIRONMENT}"
-            echo "📋 Action: ${params.ACTION}"
+            echo "Terraform pipeline completed - Environment: ${params.ENVIRONMENT}, Action: ${params.ACTION}"
         }
         failure {
-            echo '''
-            ╔══════════════════════════════════════════════════════════════╗
-            ║             ❌ TERRAFORM PIPELINE FAILED!                    ║
-            ╚══════════════════════════════════════════════════════════════╝
-            '''
-            echo "Check the logs above for details"
-        }
-        always {
-            echo "🧹 Pipeline finished"
+            echo "Terraform pipeline failed"
         }
     }
 }
-

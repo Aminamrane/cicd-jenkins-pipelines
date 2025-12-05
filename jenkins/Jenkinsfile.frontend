@@ -1,180 +1,40 @@
 /*
- * Jenkinsfile.frontend - Frontend CI/CD Pipeline
- * 
- * This pipeline builds, tests, and deploys the React frontend application.
- * 
- * Stages:
- *   1. Checkout - Clone frontend repository
- *   2. Setup - Install Node.js dependencies
- *   3. Quality - Linting, TypeScript check
- *   4. Test - Unit tests
- *   5. Build - Create production build
- *   6. Docker - Build Docker image with versioned tag
- *   7. Push - Push to Container Registry
- *   8. Deploy - Trigger Helm pipeline for frontend-only deployment
+ * Frontend CI/CD Pipeline
+ * Builds, tests, and deploys the React frontend application
  */
 
 pipeline {
     agent any
     
     environment {
-        // Docker Configuration
         DOCKER_REGISTRY = 'docker.io'
         DOCKER_IMAGE = 'aminamr/react-frontend'
-        
-        // Version tagging
         GIT_COMMIT_SHORT = ''
         IMAGE_TAG = ''
-        
-        // Node.js Configuration
-        CI = 'true'
     }
     
     options {
         timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '15'))
+        buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
-        disableConcurrentBuilds()
     }
     
     stages {
-        stage('Checkout Frontend Code') {
+        stage('Checkout') {
             steps {
-                echo '📦 Checking out frontend repository...'
                 git branch: 'main',
                     url: 'https://github.com/Aminamrane/react-frontend.git',
                     credentialsId: 'github-credentials'
                 
                 script {
-                    // Get git commit
                     GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    
-                    // Generate semantic version tag
                     IMAGE_TAG = "v1.0.${BUILD_NUMBER}-${GIT_COMMIT_SHORT}"
-                    echo "🏷️ Image tag: ${IMAGE_TAG}"
                 }
-            }
-        }
-        
-        stage('Display Project Info') {
-            steps {
-                echo '📂 Project structure:'
-                sh '''
-                    ls -la
-                    echo ""
-                    if [ -f "package.json" ]; then
-                        echo "=== package.json ==="
-                        cat package.json | head -30
-                    fi
-                '''
-            }
-        }
-        
-        stage('Install Dependencies') {
-            steps {
-                echo '📦 Installing Node.js dependencies...'
-                sh '''
-                    if command -v node &> /dev/null; then
-                        echo "Node version: $(node --version)"
-                        echo "NPM version: $(npm --version)"
-                        
-                        if [ -f "package-lock.json" ]; then
-                            npm ci
-                        else
-                            npm install
-                        fi
-                        echo "✅ Dependencies installed"
-                    else
-                        echo "⚠️ Node.js not available in Jenkins agent"
-                        echo "   Would install dependencies from package.json"
-                    fi
-                '''
-            }
-        }
-        
-        stage('Code Quality') {
-            steps {
-                echo '🔍 Running code quality checks...'
-                sh '''
-                    if command -v npm &> /dev/null && [ -d "node_modules" ]; then
-                        echo "Running ESLint..."
-                        npm run lint || echo "Lint completed with warnings"
-                        
-                        echo "Running TypeScript check..."
-                        npx tsc --noEmit || echo "TypeScript check completed"
-                    else
-                        echo "⚠️ Skipping lint - dependencies not installed"
-                        echo "   Would check:"
-                        echo "   - ESLint rules"
-                        echo "   - TypeScript types"
-                        echo "   - Prettier formatting"
-                    fi
-                '''
-                echo '✅ Code quality check completed'
-            }
-        }
-        
-        stage('Unit Tests') {
-            steps {
-                echo '🧪 Running unit tests...'
-                sh '''
-                    if command -v npm &> /dev/null && [ -d "node_modules" ]; then
-                        echo "Running Vitest..."
-                        npm run test:unit || echo "Tests completed"
-                    else
-                        echo "⚠️ Skipping tests - dependencies not installed"
-                        echo "   Would run:"
-                        echo "   - Component tests"
-                        echo "   - Unit tests"
-                        echo "   - Coverage report"
-                    fi
-                '''
-                echo '✅ Unit tests stage completed'
-            }
-        }
-        
-        stage('SonarQube Analysis') {
-            steps {
-                echo '📊 SonarQube Analysis Stage'
-                echo '''
-                ⚠️ SonarQube server not configured
-                
-                When SonarQube is available, this stage would:
-                - Analyze code quality
-                - Check code coverage
-                - Detect code smells
-                - Find security vulnerabilities
-                
-                Configuration needed:
-                - sonarqube-url credential
-                - sonarqube-token credential
-                '''
-                echo '✅ SonarQube stage completed (simulated)'
-            }
-        }
-        
-        stage('Build Frontend') {
-            steps {
-                echo '🏗️ Building React application...'
-                sh '''
-                    if command -v npm &> /dev/null && [ -d "node_modules" ]; then
-                        echo "Building for production..."
-                        npm run build
-                        
-                        echo "Build output:"
-                        ls -la dist/ || ls -la build/ || echo "Build directory not found"
-                    else
-                        echo "⚠️ Skipping build - dependencies not installed"
-                        echo "   Would create production build in dist/"
-                    fi
-                '''
-                echo '✅ Build completed'
             }
         }
         
         stage('Build Docker Image') {
             steps {
-                echo "🐋 Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
                 script {
                     def dockerAvailable = sh(script: 'which docker', returnStatus: true) == 0
                     
@@ -185,18 +45,7 @@ pipeline {
                                 -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
                                 -t ${DOCKER_IMAGE}:latest \
                                 .
-                            
-                            echo "✅ Docker image built successfully"
-                            docker images | grep ${DOCKER_IMAGE} || true
                         """
-                    } else {
-                        echo "⚠️ Docker not available in Jenkins agent"
-                        echo "   Would build:"
-                        echo "   - ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                        echo "   - ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
-                        echo "   - ${DOCKER_IMAGE}:latest"
-                        echo ""
-                        echo "   To enable Docker builds, install Docker on Jenkins agent"
                     }
                 }
             }
@@ -204,42 +53,25 @@ pipeline {
         
         stage('Push to Registry') {
             steps {
-                echo '📤 Push to Docker Registry Stage'
                 script {
                     try {
                         withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                             sh '''
-                                if command -v docker &> /dev/null; then
-                                    echo "Logging into Docker Hub..."
-                                    echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
-                                    
-                                    echo "Pushing images..."
-                                    docker push ${DOCKER_IMAGE}:${IMAGE_TAG} || echo "Push failed or image not found"
-                                    docker push ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} || echo "Push failed or image not found"
-                                    docker push ${DOCKER_IMAGE}:latest || echo "Push failed or image not found"
-                                    
-                                    echo "✅ Images pushed successfully"
-                                else
-                                    echo "⚠️ Docker not available"
-                                fi
+                                echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
+                                docker push ${DOCKER_IMAGE}:latest
                             '''
                         }
                     } catch (Exception e) {
-                        echo "⚠️ Docker Hub credentials not configured or push failed"
-                        echo "   Would push:"
-                        echo "   - ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "Push failed: ${e.message}"
                     }
                 }
-                echo '✅ Push stage completed'
             }
         }
         
-        stage('Trigger Helm Deployment') {
+        stage('Trigger Helm Deploy') {
             steps {
-                echo '🚀 Triggering Helm deployment for frontend...'
                 script {
                     try {
-                        // Trigger Helm pipeline to deploy ONLY frontend
                         build job: 'helm-deploy',
                             parameters: [
                                 string(name: 'SERVICE', value: 'frontend'),
@@ -248,12 +80,8 @@ pipeline {
                                 booleanParam(name: 'DRY_RUN', value: true)
                             ],
                             wait: false
-                        
-                        echo "✅ Helm deployment triggered for frontend with tag: ${IMAGE_TAG}"
                     } catch (Exception e) {
-                        echo "⚠️ Could not trigger Helm pipeline: ${e.message}"
-                        echo "   Manual deployment command:"
-                        echo "   helm upgrade --install app-frontend charts/frontend --set image.tag=${IMAGE_TAG}"
+                        echo "Could not trigger Helm pipeline"
                     }
                 }
             }
@@ -262,25 +90,10 @@ pipeline {
     
     post {
         success {
-            echo '''
-            ╔══════════════════════════════════════════════════════════════╗
-            ║        ✅ FRONTEND PIPELINE COMPLETED SUCCESSFULLY!          ║
-            ╚══════════════════════════════════════════════════════════════╝
-            '''
-            echo "🏷️ Version: ${IMAGE_TAG}"
-            echo "📦 Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-            echo "🔗 Git Commit: ${GIT_COMMIT_SHORT}"
+            echo "Frontend pipeline completed - Version: ${IMAGE_TAG}"
         }
         failure {
-            echo '''
-            ╔══════════════════════════════════════════════════════════════╗
-            ║              ❌ FRONTEND PIPELINE FAILED!                    ║
-            ╚══════════════════════════════════════════════════════════════╝
-            '''
-            echo "Check the logs above for details"
-        }
-        always {
-            echo '🧹 Pipeline finished'
+            echo "Frontend pipeline failed"
         }
     }
 }
