@@ -63,3 +63,4 @@ frontend:
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
 
+
