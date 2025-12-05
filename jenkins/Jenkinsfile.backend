@@ -139,12 +139,11 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo "🐋 Building Docker image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                sh '''
-                    if [ -f "Dockerfile" ]; then
-                        echo "Dockerfile found, building image..."
-                        
-                        # Check if Docker is available
-                        if command -v docker &> /dev/null; then
+                script {
+                    def dockerAvailable = sh(script: 'which docker', returnStatus: true) == 0
+                    
+                    if (dockerAvailable) {
+                        sh """
                             docker build \
                                 -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
                                 -t ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT} \
@@ -153,17 +152,17 @@ pipeline {
                             
                             echo "✅ Docker image built successfully"
                             docker images | grep ${DOCKER_IMAGE} || true
-                        else
-                            echo "⚠️ Docker not available in Jenkins agent"
-                            echo "   Would build:"
-                            echo "   - ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                            echo "   - ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
-                            echo "   - ${DOCKER_IMAGE}:latest"
-                        fi
-                    else
-                        echo "⚠️ No Dockerfile found"
-                    fi
-                '''
+                        """
+                    } else {
+                        echo "⚠️ Docker not available in Jenkins agent"
+                        echo "   Would build:"
+                        echo "   - ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                        echo "   - ${DOCKER_IMAGE}:${GIT_COMMIT_SHORT}"
+                        echo "   - ${DOCKER_IMAGE}:latest"
+                        echo ""
+                        echo "   To enable Docker builds, install Docker on Jenkins agent"
+                    }
+                }
             }
         }
         
