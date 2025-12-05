@@ -19,7 +19,7 @@ pipeline {
     environment {
         // Docker Configuration
         DOCKER_REGISTRY = 'docker.io'
-        DOCKER_IMAGE = 'aminamrane/fastapi-backend'
+        DOCKER_IMAGE = 'aminamr/fastapi-backend'
         
         // Version tagging
         GIT_COMMIT_SHORT = ''

@@ -20,7 +20,7 @@ pipeline {
     environment {
         // Docker Configuration
         DOCKER_REGISTRY = 'docker.io'
-        DOCKER_IMAGE = 'aminamrane/react-frontend'
+        DOCKER_IMAGE = 'aminamr/react-frontend'
         
         // Version tagging
         GIT_COMMIT_SHORT = ''
