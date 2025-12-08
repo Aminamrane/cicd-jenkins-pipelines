@@ -1,25 +1,26 @@
 /*
  * Helm Deployment Pipeline - Production Ready
- * Deploys to EKS cluster using Helm
+ * Deploys to k3s cluster using Helm (Platform chart)
+ * Structure: helm/platform/ (umbrella chart) + overlays/${ENV}/values.yaml
  */
 
 pipeline {
     agent any
     
     parameters {
-        choice(name: 'SERVICE', choices: ['all', 'backend', 'frontend'], description: 'Service to deploy')
+        choice(name: 'SERVICE', choices: ['all', 'auth', 'users', 'items', 'frontend'], description: 'Service to deploy (all = platform chart)')
         string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag')
         choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'prod'], description: 'Target environment')
         booleanParam(name: 'DRY_RUN', defaultValue: true, description: 'Helm dry-run only')
     }
     
     environment {
-        HELM_NAMESPACE = "app-${params.ENVIRONMENT}"
-        CHARTS_DIR = 'charts'
+        HELM_NAMESPACE = "${params.ENVIRONMENT}"
+        PLATFORM_CHART_DIR = 'helm/platform'
+        OVERLAYS_DIR = 'overlays'
         
-        // AWS config - set by infra team
-        AWS_REGION = "${env.AWS_REGION ?: 'eu-west-1'}"
-        EKS_CLUSTER = "${env.EKS_CLUSTER ?: 'app-cluster'}"
+        // k3s config - kubeconfig should be configured in Jenkins
+        KUBECONFIG = "${env.KUBECONFIG ?: "${env.HOME}/.kube/config"}"
     }
     
     options {
@@ -50,17 +51,28 @@ pipeline {
             }
         }
         
+        stage('Helm Dependency Update') {
+            steps {
+                script {
+                    def helmExists = sh(script: 'which helm', returnStatus: true) == 0
+                    if (helmExists) {
+                        sh """
+                            cd ${PLATFORM_CHART_DIR}
+                            helm dependency update
+                        """
+                    } else {
+                        echo "Helm not installed - skipping dependency update"
+                    }
+                }
+            }
+        }
+        
         stage('Helm Lint') {
             steps {
                 script {
                     def helmExists = sh(script: 'which helm', returnStatus: true) == 0
                     if (helmExists) {
-                        if (params.SERVICE == 'all' || params.SERVICE == 'backend') {
-                            sh "helm lint ${CHARTS_DIR}/backend/"
-                        }
-                        if (params.SERVICE == 'all' || params.SERVICE == 'frontend') {
-                            sh "helm lint ${CHARTS_DIR}/frontend/"
-                        }
+                        sh "helm lint ${PLATFORM_CHART_DIR}/"
                     } else {
                         echo "Helm not installed - skipping lint"
                     }
@@ -71,68 +83,85 @@ pipeline {
         stage('Configure Kubernetes') {
             steps {
                 script {
-                    def awsExists = sh(script: 'which aws', returnStatus: true) == 0
-                    if (awsExists) {
-                        sh "aws eks update-kubeconfig --name ${EKS_CLUSTER} --region ${AWS_REGION}"
+                    // Pour k3s, on utilise généralement un kubeconfig local
+                    def kubeconfigPath = env.KUBECONFIG ?: "${env.HOME}/.kube/config"
+                    
+                    if (fileExists(kubeconfigPath)) {
+                        echo "Using kubeconfig: ${kubeconfigPath}"
+                        sh "export KUBECONFIG=${kubeconfigPath}"
                     } else {
-                        echo "AWS CLI not installed - using existing kubeconfig"
+                        echo "⚠️ KUBECONFIG not found at ${kubeconfigPath}"
+                        echo "For k3s, ensure kubeconfig is configured in Jenkins credentials or environment"
+                        echo "You can get k3s kubeconfig with: sudo cat /etc/rancher/k3s/k3s.yaml"
+                    }
+                    
+                    // Vérifier la connexion
+                    def kubectlExists = sh(script: 'which kubectl', returnStatus: true) == 0
+                    if (kubectlExists) {
+                        sh "kubectl cluster-info || true"
+                        sh "kubectl get nodes || true"
                     }
                 }
             }
         }
         
-        stage('Deploy Backend') {
-            when {
-                expression { return params.SERVICE == 'all' || params.SERVICE == 'backend' }
-            }
+        stage('Create Namespace') {
             steps {
                 script {
-                    def helmExists = sh(script: 'which helm', returnStatus: true) == 0
-                    def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
-                    def dryRunFlag = params.DRY_RUN ? '--dry-run' : ''
+                    def kubectlExists = sh(script: 'which kubectl', returnStatus: true) == 0
+                    def namespaceFile = "${OVERLAYS_DIR}/${params.ENVIRONMENT}/namespace.yaml"
                     
-                    if (helmExists) {
-                        sh """
-                            helm upgrade --install backend-${params.ENVIRONMENT} ${CHARTS_DIR}/backend/ \
-                                --namespace ${HELM_NAMESPACE} \
-                                --create-namespace \
-                                -f ${valuesFile} \
-                                --set image.tag=${params.IMAGE_TAG} \
-                                ${dryRunFlag}
-                        """
+                    if (fileExists(namespaceFile) && kubectlExists) {
+                        sh "kubectl apply -f ${namespaceFile}"
                     } else {
-                        echo "Would deploy backend to ${params.ENVIRONMENT}"
-                        echo "Release: backend-${params.ENVIRONMENT}"
-                        echo "Namespace: ${HELM_NAMESPACE}"
-                        echo "Image tag: ${params.IMAGE_TAG}"
+                        echo "Namespace file not found or kubectl not available - namespace will be created by Helm"
                     }
                 }
             }
         }
         
-        stage('Deploy Frontend') {
-            when {
-                expression { return params.SERVICE == 'all' || params.SERVICE == 'frontend' }
-            }
+        stage('Deploy Platform') {
             steps {
                 script {
                     def helmExists = sh(script: 'which helm', returnStatus: true) == 0
-                    def valuesFile = "${CHARTS_DIR}/values-${params.ENVIRONMENT}.yaml"
+                    def valuesFile = "${OVERLAYS_DIR}/${params.ENVIRONMENT}/values.yaml"
                     def dryRunFlag = params.DRY_RUN ? '--dry-run' : ''
+                    
+                    // Construire les --set pour mettre à jour les tags d'images selon le service
+                    def setArgs = ""
+                    
+                    if (params.SERVICE == 'all') {
+                        // Mettre à jour tous les services
+                        setArgs = """
+                            --set auth.image.tag=${params.IMAGE_TAG} \
+                            --set users.image.tag=${params.IMAGE_TAG} \
+                            --set items.image.tag=${params.IMAGE_TAG} \
+                            --set frontend.image.tag=${params.IMAGE_TAG}
+                        """
+                    } else if (params.SERVICE == 'auth') {
+                        setArgs = "--set auth.image.tag=${params.IMAGE_TAG}"
+                    } else if (params.SERVICE == 'users') {
+                        setArgs = "--set users.image.tag=${params.IMAGE_TAG}"
+                    } else if (params.SERVICE == 'items') {
+                        setArgs = "--set items.image.tag=${params.IMAGE_TAG}"
+                    } else if (params.SERVICE == 'frontend') {
+                        setArgs = "--set frontend.image.tag=${params.IMAGE_TAG}"
+                    }
                     
                     if (helmExists) {
                         sh """
-                            helm upgrade --install frontend-${params.ENVIRONMENT} ${CHARTS_DIR}/frontend/ \
+                            helm upgrade --install platform-${params.ENVIRONMENT} ${PLATFORM_CHART_DIR}/ \
                                 --namespace ${HELM_NAMESPACE} \
                                 --create-namespace \
                                 -f ${valuesFile} \
-                                --set image.tag=${params.IMAGE_TAG} \
+                                ${setArgs} \
                                 ${dryRunFlag}
                         """
                     } else {
-                        echo "Would deploy frontend to ${params.ENVIRONMENT}"
-                        echo "Release: frontend-${params.ENVIRONMENT}"
+                        echo "Would deploy platform to ${params.ENVIRONMENT}"
+                        echo "Release: platform-${params.ENVIRONMENT}"
                         echo "Namespace: ${HELM_NAMESPACE}"
+                        echo "Service: ${params.SERVICE}"
                         echo "Image tag: ${params.IMAGE_TAG}"
                     }
                 }

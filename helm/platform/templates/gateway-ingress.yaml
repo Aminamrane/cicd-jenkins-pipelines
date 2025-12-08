@@ -1,0 +1,67 @@
+# INGRESS pour AUTH
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-auth
+  namespace: {{ .Values.global.environment | default "dev" }}
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    # Appliquer SEULEMENT strip-auth-prefix et rate-limit
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.global.environment | default "dev" }}-strip-auth-prefix@kubernetescrd,{{ .Values.global.environment | default "dev" }}-rate-limit@kubernetescrd
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: platform-auth
+                port:
+                  number: 80
+
+---
+# INGRESS pour USERS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-users
+  namespace: {{ .Values.global.environment | default "dev" }}
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    # Appliquer SEULEMENT strip-users-prefix et rate-limit
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.global.environment | default "dev" }}-strip-users-prefix@kubernetescrd,{{ .Values.global.environment | default "dev" }}-rate-limit@kubernetescrd
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /users
+            pathType: Prefix
+            backend:
+              service:
+                name: platform-users
+                port:
+                  number: 80
+
+---
+# INGRESS pour ITEMS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-items
+  namespace: {{ .Values.global.environment | default "dev" }}
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    # Appliquer SEULEMENT strip-items-prefix et rate-limit
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.global.environment | default "dev" }}-strip-items-prefix@kubernetescrd,{{ .Values.global.environment | default "dev" }}-rate-limit@kubernetescrd
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /items
+            pathType: Prefix
+            backend:
+              service:
+                name: platform-items
+                port:
+                  number: 80

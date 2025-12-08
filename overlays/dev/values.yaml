@@ -1,0 +1,47 @@
+global:
+  imageRegistry: docker.io
+  environment: dev
+  useExternalSecrets: true  # Activer ESO pour AWS
+
+auth:
+  ingress:
+    enabled: true
+    host: "api.leotest.abrdns.com"
+    path: /auth
+  image:
+    repository: leogrv22/auth
+    tag: dev
+  # Les secrets seront lus depuis ESO
+  secrets: {}
+
+users:
+  ingress:
+    enabled: true
+    host: "api.leotest.abrdns.com"
+    path: /users
+  image:
+    repository: leogrv22/users
+    tag: dev
+  secrets: {}
+
+items:
+  ingress:
+    enabled: true
+    host: "api.leotest.abrdns.com"
+    path: /items
+  image:
+    repository: leogrv22/items
+    tag: dev
+  secrets: {}
+
+frontend:
+  image:
+    registry: docker.io
+    repository: leogrv22/frontend
+    tag: dev
+  env:
+    NEXT_PUBLIC_API_BASE: "http://api.leotest.abrdns.com"
+  ingress:
+    enabled: true
+    host: "app.leotest.abrdns.com"
+    path: /
