@@ -4,17 +4,17 @@ global:
 
 auth:
   image:
-    repository: leogrv22/auth
+    repository: aminamr/auth
     tag: dev
 
 users:
   image:
-    repository: leogrv22/users
+    repository: aminamr/users
     tag: dev
 
 items:
   image:
-    repository: leogrv22/items
+    repository: aminamr/items
     tag: dev
 
 gateway:

@@ -10,8 +10,8 @@ pipeline {
         // Registry config - k3s uses Docker Hub by default
         // Can be overridden to use ECR if needed
         DOCKER_REGISTRY = "${params.USE_ECR ? env.AWS_ACCOUNT_ID + '.dkr.ecr.' + env.AWS_REGION + '.amazonaws.com' : 'docker.io'}"
-        // Default to camarade's image naming (leogrv22/auth) or use custom
-        DOCKER_IMAGE = "${params.USE_ECR ? 'fastapi-backend' : (env.BACKEND_IMAGE_NAME ?: 'leogrv22/auth')}"
+        // Default to aminamr images on Docker Hub
+        DOCKER_IMAGE = "${params.USE_ECR ? 'fastapi-backend' : (env.BACKEND_IMAGE_NAME ?: 'aminamr/fastapi-backend')}"
         
         // Build info
         GIT_COMMIT_SHORT = ''

@@ -9,7 +9,7 @@ auth:
     host: "api.leotest.abrdns.com"
     path: /auth
   image:
-    repository: leogrv22/auth
+    repository: aminamr/auth
     tag: dev
   # Les secrets seront lus depuis ESO
   secrets: {}
@@ -20,7 +20,7 @@ users:
     host: "api.leotest.abrdns.com"
     path: /users
   image:
-    repository: leogrv22/users
+    repository: aminamr/users
     tag: dev
   secrets: {}
 
@@ -30,14 +30,14 @@ items:
     host: "api.leotest.abrdns.com"
     path: /items
   image:
-    repository: leogrv22/items
+    repository: aminamr/items
     tag: dev
   secrets: {}
 
 frontend:
   image:
     registry: docker.io
-    repository: leogrv22/frontend
+    repository: aminamr/frontend
     tag: dev
   env:
     NEXT_PUBLIC_API_BASE: "http://api.leotest.abrdns.com"
