@@ -54,10 +54,11 @@ pipeline {
         
         // Source code repo (ta camarade)
         SOURCE_REPO = 'https://github.com/titi92390/fastapi-microservices-sep25.git'
+        SOURCE_BRANCH = 'master'
         
         // Build info - will be set dynamically
-        GIT_COMMIT_SHORT = ''
-        IMAGE_TAG = ''
+        GIT_COMMIT_SHORT = 'unknown'
+        IMAGE_TAG = 'latest'
         FULL_IMAGE = ''
         DOCKERFILE_PATH = ''
     }
@@ -98,9 +99,9 @@ pipeline {
                 // Clean workspace
                 cleanWs()
                 
-                // Clone source repo
-                git branch: 'main',
-                    url: env.SOURCE_REPO,
+                // Clone source repo (repo de ta camarade)
+                git branch: 'master',
+                    url: 'https://github.com/titi92390/fastapi-microservices-sep25.git',
                     credentialsId: 'github-credentials'
                 
                 script {
@@ -252,36 +253,15 @@ pipeline {
     
     post {
         success {
-            echo """
-╔════════════════════════════════════════════════════════════════╗
-║                    ✅ PIPELINE SUCCESS                          ║
-╠════════════════════════════════════════════════════════════════╣
-║  Service:     ${params.SERVICE}
-║  Image:       ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}
-║  Environment: ${params.ENVIRONMENT}
-║  Deployed:    ${params.AUTO_DEPLOY ? 'Yes' : 'No'}
-╚════════════════════════════════════════════════════════════════╝
-            """
+            echo "✅ PIPELINE SUCCESS - Service: ${params.SERVICE}, Image: ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}"
         }
         failure {
-            echo """
-╔════════════════════════════════════════════════════════════════╗
-║                    ❌ PIPELINE FAILED                           ║
-╠════════════════════════════════════════════════════════════════╣
-║  Service:     ${params.SERVICE}
-║  Environment: ${params.ENVIRONMENT}
-║  Check logs for details
-╚════════════════════════════════════════════════════════════════╝
-            """
+            echo "❌ PIPELINE FAILED - Service: ${params.SERVICE}, Environment: ${params.ENVIRONMENT}"
         }
-        always {
+        cleanup {
             // Cleanup Docker images to save space
-            script {
-                sh """
-                    docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG} || true
-                    docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${GIT_COMMIT_SHORT} || true
-                """
-            }
+            sh "docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG} || true"
+            sh "docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${GIT_COMMIT_SHORT} || true"
         }
     }
 }
