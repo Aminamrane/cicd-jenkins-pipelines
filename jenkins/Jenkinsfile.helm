@@ -131,13 +131,7 @@ pipeline {
                     def setArgs = ""
                     
                     if (params.SERVICE == 'all') {
-                        // Mettre à jour tous les services
-                        setArgs = """
-                            --set auth.image.tag=${params.IMAGE_TAG} \
-                            --set users.image.tag=${params.IMAGE_TAG} \
-                            --set items.image.tag=${params.IMAGE_TAG} \
-                            --set frontend.image.tag=${params.IMAGE_TAG}
-                        """
+                        setArgs = "--set auth.image.tag=${params.IMAGE_TAG} --set users.image.tag=${params.IMAGE_TAG} --set items.image.tag=${params.IMAGE_TAG} --set frontend.image.tag=${params.IMAGE_TAG}"
                     } else if (params.SERVICE == 'auth') {
                         setArgs = "--set auth.image.tag=${params.IMAGE_TAG}"
                     } else if (params.SERVICE == 'users') {
@@ -149,14 +143,7 @@ pipeline {
                     }
                     
                     if (helmExists) {
-                        sh """
-                            helm upgrade --install platform-${params.ENVIRONMENT} ${PLATFORM_CHART_DIR}/ \
-                                --namespace ${HELM_NAMESPACE} \
-                                --create-namespace \
-                                -f ${valuesFile} \
-                                ${setArgs} \
-                                ${dryRunFlag}
-                        """
+                        sh "helm upgrade --install platform-${params.ENVIRONMENT} ${PLATFORM_CHART_DIR}/ --namespace ${HELM_NAMESPACE} --create-namespace -f ${valuesFile} ${setArgs} ${dryRunFlag}"
                     } else {
                         echo "Would deploy platform to ${params.ENVIRONMENT}"
                         echo "Release: platform-${params.ENVIRONMENT}"
