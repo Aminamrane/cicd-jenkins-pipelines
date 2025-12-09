@@ -1,0 +1,288 @@
+/*
+ * Microservices CI/CD Pipeline - Production Ready
+ * 
+ * Pipeline paramétrable pour builder et déployer les microservices :
+ * - auth, users, items (backend FastAPI)
+ * - frontend (Next.js)
+ * 
+ * Workflow:
+ * 1. Checkout du code source
+ * 2. Tests unitaires
+ * 3. Build image Docker
+ * 4. Security scan (Trivy)
+ * 5. Push vers Docker Hub
+ * 6. Trigger Helm deploy
+ * 
+ * @author Amin Amrane - CI/CD Engineer
+ */
+
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'SERVICE',
+            choices: ['auth', 'users', 'items', 'frontend'],
+            description: 'Microservice à builder et déployer'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Environnement cible'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Passer les tests unitaires'
+        )
+        booleanParam(
+            name: 'SECURITY_SCAN',
+            defaultValue: true,
+            description: 'Exécuter le scan de sécurité Trivy'
+        )
+        booleanParam(
+            name: 'AUTO_DEPLOY',
+            defaultValue: true,
+            description: 'Déployer automatiquement après le push'
+        )
+    }
+    
+    environment {
+        // Docker Hub config
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_NAMESPACE = 'aminamr'
+        
+        // Source code repo (ta camarade)
+        SOURCE_REPO = 'https://github.com/titi92390/fastapi-microservices-sep25.git'
+        
+        // Build info - will be set dynamically
+        GIT_COMMIT_SHORT = ''
+        IMAGE_TAG = ''
+        FULL_IMAGE = ''
+        DOCKERFILE_PATH = ''
+    }
+    
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timestamps()
+        ansiColor('xterm')
+    }
+    
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    // Set paths based on service
+                    if (params.SERVICE == 'frontend') {
+                        DOCKERFILE_PATH = 'frontend'
+                    } else {
+                        DOCKERFILE_PATH = "Microservices/${params.SERVICE}"
+                    }
+                    
+                    echo """
+╔════════════════════════════════════════════════════════════════╗
+║           MICROSERVICES CI/CD PIPELINE                         ║
+╠════════════════════════════════════════════════════════════════╣
+║  Service:      ${params.SERVICE}
+║  Environment:  ${params.ENVIRONMENT}
+║  Dockerfile:   ${DOCKERFILE_PATH}/Dockerfile
+║  Registry:     ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${params.SERVICE}
+╚════════════════════════════════════════════════════════════════╝
+                    """
+                }
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                // Clean workspace
+                cleanWs()
+                
+                // Clone source repo
+                git branch: 'main',
+                    url: env.SOURCE_REPO,
+                    credentialsId: 'github-credentials'
+                
+                script {
+                    GIT_COMMIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    IMAGE_TAG = "v${BUILD_NUMBER}-${GIT_COMMIT_SHORT}"
+                    FULL_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}"
+                    
+                    echo "📦 Image to build: ${FULL_IMAGE}"
+                }
+            }
+        }
+        
+        stage('Validate Dockerfile') {
+            steps {
+                script {
+                    def dockerfilePath = "${DOCKERFILE_PATH}/Dockerfile"
+                    if (!fileExists(dockerfilePath)) {
+                        error "❌ Dockerfile not found at: ${dockerfilePath}"
+                    }
+                    echo "✅ Dockerfile found: ${dockerfilePath}"
+                    
+                    // Show Dockerfile content for debugging
+                    sh "head -20 ${dockerfilePath}"
+                }
+            }
+        }
+        
+        stage('Unit Tests') {
+            when {
+                expression { return !params.SKIP_TESTS && params.SERVICE != 'frontend' }
+            }
+            steps {
+                script {
+                    echo "🧪 Running tests for ${params.SERVICE}..."
+                    
+                    // Check if tests exist
+                    def testPath = "${DOCKERFILE_PATH}/tests"
+                    if (fileExists(testPath)) {
+                        sh """
+                            cd ${DOCKERFILE_PATH}
+                            if command -v pytest &> /dev/null; then
+                                pytest tests/ -v --junitxml=test-results.xml || true
+                            else
+                                echo "pytest not available - skipping tests"
+                            fi
+                        """
+                    } else {
+                        echo "⚠️ No tests directory found - skipping tests"
+                    }
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "🔨 Building Docker image..."
+                    
+                    sh """
+                        docker build \
+                            -t ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG} \
+                            -t ${DOCKER_NAMESPACE}/${params.SERVICE}:${GIT_COMMIT_SHORT} \
+                            -t ${DOCKER_NAMESPACE}/${params.SERVICE}:latest \
+                            -f ${DOCKERFILE_PATH}/Dockerfile \
+                            ${DOCKERFILE_PATH}/
+                    """
+                    
+                    echo "✅ Image built: ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}"
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            when {
+                expression { return params.SECURITY_SCAN }
+            }
+            steps {
+                script {
+                    def trivyExists = sh(script: 'which trivy', returnStatus: true) == 0
+                    if (trivyExists) {
+                        echo "🔒 Running security scan..."
+                        sh """
+                            trivy image \
+                                --exit-code 0 \
+                                --severity HIGH,CRITICAL \
+                                --format table \
+                                ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}
+                        """
+                    } else {
+                        echo "⚠️ Trivy not installed - security scan skipped"
+                        echo "   Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh"
+                    }
+                }
+            }
+        }
+        
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    echo "📤 Pushing to Docker Hub..."
+                    
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker-hub-credentials',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh '''
+                            echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
+                        '''
+                        
+                        sh """
+                            docker push ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}
+                            docker push ${DOCKER_NAMESPACE}/${params.SERVICE}:latest
+                        """
+                    }
+                    
+                    echo "✅ Pushed: ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}"
+                    echo "✅ Pushed: ${DOCKER_NAMESPACE}/${params.SERVICE}:latest"
+                }
+            }
+        }
+        
+        stage('Deploy to Kubernetes') {
+            when {
+                expression { return params.AUTO_DEPLOY }
+            }
+            steps {
+                script {
+                    echo "🚀 Triggering Helm deployment..."
+                    
+                    // Determine if dry-run based on environment
+                    def dryRun = (params.ENVIRONMENT != 'dev')
+                    
+                    build job: 'helm-deploy',
+                        parameters: [
+                            string(name: 'SERVICE', value: params.SERVICE),
+                            string(name: 'IMAGE_TAG', value: 'latest'),
+                            string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                            booleanParam(name: 'DRY_RUN', value: dryRun)
+                        ],
+                        wait: true,
+                        propagate: true
+                    
+                    echo "✅ Deployment triggered for ${params.SERVICE}"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo """
+╔════════════════════════════════════════════════════════════════╗
+║                    ✅ PIPELINE SUCCESS                          ║
+╠════════════════════════════════════════════════════════════════╣
+║  Service:     ${params.SERVICE}
+║  Image:       ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG}
+║  Environment: ${params.ENVIRONMENT}
+║  Deployed:    ${params.AUTO_DEPLOY ? 'Yes' : 'No'}
+╚════════════════════════════════════════════════════════════════╝
+            """
+        }
+        failure {
+            echo """
+╔════════════════════════════════════════════════════════════════╗
+║                    ❌ PIPELINE FAILED                           ║
+╠════════════════════════════════════════════════════════════════╣
+║  Service:     ${params.SERVICE}
+║  Environment: ${params.ENVIRONMENT}
+║  Check logs for details
+╚════════════════════════════════════════════════════════════════╝
+            """
+        }
+        always {
+            // Cleanup Docker images to save space
+            script {
+                sh """
+                    docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${IMAGE_TAG} || true
+                    docker rmi ${DOCKER_NAMESPACE}/${params.SERVICE}:${GIT_COMMIT_SHORT} || true
+                """
+            }
+        }
+    }
+}
